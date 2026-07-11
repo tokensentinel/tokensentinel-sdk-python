@@ -2,9 +2,11 @@
 
 Predictive token-waste detection for AI agents.
 
-A Python SDK that catches token waste *mid-run* — while a session is still active — and gives your app a callback to log, alert, or hard-stop the agent before the *next* call goes out. Detection runs after each provider response returns (that call is already billed); intervention saves subsequent turns. Apache-2.0 licensed, zero-dependency core. Pair the SDK with the optional TokenSentinel Cloud for hosted dashboards, budget enforcement, drift detection, and judge ratification on Pro.
+A Python SDK that catches token waste *mid-run* — while a session is still active — and gives your app a callback to log, alert or hard-stop the agent before the *next* call goes out. Detection runs after each provider response returns (that call is already billed); intervention saves subsequent turns. Pair the SDK with the optional TokenSentinel Cloud for hosted dashboards, budget enforcement, drift detection, and judge ratification on Pro tier.
 
-Existing observability tools (Langfuse, LangSmith, Helicone, Datadog LLM) tell you what your bill was. TokenSentinel tells you which agent is leaking *right now*.
+Existing observability tools (Langfuse, LangSmith, Helicone, Datadog LLM) tell you what your bill was. TokenSentinel tells you which agent is leaking(wasting tokens) *right now*.
+
+**Documentation:** [https://docs.tokensentinel.dev](https://docs.tokensentinel.dev)
 
 ## What it catches
 
@@ -129,7 +131,7 @@ This repository is the **Apache-2.0 SDK only**. The commercial product is separa
 | Zero network by default | Intervention Pack: budgets, velocity, kill-switch |
 | Self-host friendly | Pro: judge, drift, composites, RBAC, chargeback |
 
-Configure cloud via `cloud_endpoint=` and `api_key=` on `Sentinel(...)`. Tier comparison and pricing: [tokensentinel.dev](https://tokensentinel.dev). Full user guide: [docs/user/README.md](docs/user/README.md).
+Configure cloud via `cloud_endpoint=` and `api_key=` on `Sentinel(...)`. Tier comparison and pricing: [tokensentinel.dev](https://tokensentinel.dev). Full user guide: [https://docs.tokensentinel.dev](https://docs.tokensentinel.dev).
 
 ## Migrate from Helicone / Langfuse / LangSmith
 
@@ -159,18 +161,21 @@ rule detection runs entirely in-process. The composite rules and judge ratificat
 
 ## Docs
 
-User-facing docs (published with the OSS SDK):
+- **Hosted docs:** [https://docs.tokensentinel.dev](https://docs.tokensentinel.dev)
+- **Homepage:** [https://tokensentinel.dev](https://tokensentinel.dev)
 
-- [User Guide](docs/user/) — installation, quickstart, modes, leak rules, providers, integrations, API reference
+Also in this repository:
+
+- [User Guide](docs/user/) — installation, quickstart, modes, waste rules, providers, integrations, API reference
 - [Architecture](docs/architecture.md) — how the wrapper, tracer, and rules engine fit together
-- [Leak taxonomy](docs/waste-taxonomy.md) — the rules in detail with thresholds and false-positive hazards
+- [Waste taxonomy](docs/waste-taxonomy.md) — the rules in detail with thresholds and false-positive hazards
 - [Providers](docs/providers.md) — full matrix of supported providers
 - [Integration patterns](docs/integration-patterns.md) — MCP, RAG, LangChain, LangGraph, CrewAI, AutoGen, Pydantic AI
 - [Changelog](CHANGELOG.md)
 
 ## Contact & Support
 
-For support, feedback, or inquiries, please contact shakyasmreta@gmail.com or visit our official website at [tokensentinel.dev](https://tokensentinel.dev).
+For support, feedback, or inquiries: [shakyasmreta@gmail.com](mailto:shakyasmreta@gmail.com) · [tokensentinel.dev](https://tokensentinel.dev) · [docs.tokensentinel.dev](https://docs.tokensentinel.dev).
 
 ## License
 
