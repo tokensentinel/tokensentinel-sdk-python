@@ -209,9 +209,10 @@ def test_async_warning_fires_on_proxy_construction_failure_under_block_mode(
     assert relevant[0].category is RuntimeWarning
 
 
-def test_sync_warning_message_mentions_roadmap(monkeypatch):
-    """The canonical message text mentions the roadmap and the alternate providers
-    so customers know what to use today."""
+def test_sync_warning_message_explains_proxy_bypass(monkeypatch):
+    """The canonical message text explains that the stream proxy could not be
+    constructed and that block mode / CallRecord emission are bypassed for
+    this call (not that streaming is unimplemented)."""
     client = _make_sync_client(stream_chunks=[])
     s = Sentinel(project="proj", mode="block")
     wrap_openai(client, s)
@@ -224,10 +225,9 @@ def test_sync_warning_message_mentions_roadmap(monkeypatch):
     relevant = _stream_warnings(caught)
     assert len(relevant) == 1
     msg = str(relevant[0].message)
-    assert "roadmap" in msg
-    assert "Anthropic" in msg
-    assert "Gemini" in msg
-    assert "Bedrock" in msg
+    assert "proxy could not be constructed" in msg
+    assert "block" in msg.lower()
+    assert "CallRecord" in msg
 
 
 # ===========================================================================
@@ -386,7 +386,9 @@ def test_warning_is_suppressible_via_filterwarnings(monkeypatch):
     monkeypatch.setattr(openai_module, "_OpenAIStreamProxy", _BoomProxy)
 
     with warnings.catch_warnings(record=True) as caught:
-        warnings.filterwarnings("ignore", message=".*OpenAI streaming bypass.*")
+        warnings.filterwarnings(
+            "ignore", message=".*OpenAI streaming instrumentation bypassed.*"
+        )
         client.chat.completions.create(model="gpt-4o", messages=[], stream=True)
 
     assert _stream_warnings(caught) == []

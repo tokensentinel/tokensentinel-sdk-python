@@ -21,7 +21,7 @@
        ▼                                                      │
   ┌──────────────┐    ┌─────────────────┐    ┌────────────────┴─────────────┐
   │ wrapped      │───▶│ tracer (in-proc)│───▶│ rules engine (in-proc)       │
-  │ Anthropic    │    │  capture I/O    │    │  8 rules + thresholds        │
+  │ Anthropic    │    │  capture I/O    │    │  15 rules + thresholds       │
   │ client       │    │  token counts   │    │  emits LeakEvent             │
   └──────────────┘    └────────┬────────┘    └─────────────┬────────────────┘
                                │                           │
@@ -33,6 +33,12 @@
                        └──────────────────────────────────────────────┘
 ```
 
+**Timing note.** Wrappers invoke the real provider API first, then build a
+`CallRecord` and run the rules engine. Detection (and `mode="block"` /
+policy raises) therefore act **after** the current call has already been
+billed. The savings come from halting the *next* call in a wasteful loop,
+not from preventing the call that just completed.
+
 ## Components
 
 ### Wrapper layer (`token_sentinel/wrappers/`)
@@ -41,7 +47,7 @@
 - `wrappers/openai.py` — same pattern for the OpenAI v1 client.
 - `wrappers/gemini.py` — same pattern for `google.genai.Client` (covers Vertex AI via `vertexai=True`).
 - `wrappers/bedrock.py` — same pattern for boto3 `bedrock-runtime` clients.
-- Streaming: passthrough generators that fan tokens to the tracer as they arrive. Final usage record reconciled at stream close.
+- Streaming: instrumented proxy iterators / context managers that siphon chunks as they arrive. Final `CallRecord` reconciled at stream close (OpenAI included; usage often requires provider-specific flags such as `stream_options.include_usage`).
 
 ### Tracer (`token_sentinel/tracer.py`)
 
@@ -98,6 +104,10 @@ For Anthropic: same approach — mutate the live instance's `messages.create`. T
 
 ## Why not OTel-first ingestion
 
-OTel is read-only by design. The wedge — mid-run intervention — requires being in the data path so we can return a callback (or in `block` mode, raise an exception) that the host app's flow control can act on. OTel spans are emitted *after* the call completes; the meter has already spun.
+OTel is read-only by design. The wedge — mid-run intervention on the *next*
+call — requires being in the data path so we can return a callback (or in
+`block` mode, raise an exception) that the host app's flow control can act
+on before another request goes out. OTel spans are emitted after the call
+completes with no hook into that control flow.
 
 We plan to *emit* OTel spans on the roadmap so customers can fan TokenSentinel events into their existing observability stack. We do not *ingest* via OTel.

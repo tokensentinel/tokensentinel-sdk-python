@@ -701,7 +701,7 @@ def test_warn_block_mode_stream_emits_correct_category_with_pytest_warns():
     UserWarning). ``pytest.warns(RuntimeWarning)`` must catch it.
     """
     s = Sentinel(project="proj", mode="block")
-    with pytest.warns(RuntimeWarning, match="OpenAI streaming bypass"):
+    with pytest.warns(RuntimeWarning, match="OpenAI streaming instrumentation bypassed"):
         _warn_block_mode_stream_once(s, "sync")
 
 

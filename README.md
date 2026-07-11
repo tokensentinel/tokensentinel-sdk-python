@@ -2,9 +2,11 @@
 
 Predictive token-waste detection for AI agents.
 
-A Python SDK that catches token waste *mid-run* — before the meter spins — and gives your app a callback to log, alert, or hard-stop the agent. Apache-2.0 licensed, zero-dependency core. Pair the SDK with the optional TokenSentinel Cloud for hosted dashboards, budget enforcement, drift detection, and judge ratification on Pro.
+A Python SDK that catches token waste *mid-run* — while a session is still active — and gives your app a callback to log, alert or hard-stop the agent before the *next* call goes out. Detection runs after each provider response returns (that call is already billed); intervention saves subsequent turns. Pair the SDK with the optional TokenSentinel Cloud for hosted dashboards, budget enforcement, drift detection, and judge ratification on Pro tier.
 
-Existing observability tools (Langfuse, LangSmith, Helicone, Datadog LLM) tell you what your bill was. TokenSentinel tells you which agent is leaking *right now*.
+Existing observability tools (Langfuse, LangSmith, Helicone, Datadog LLM) tell you what your bill was. TokenSentinel tells you which agent is leaking(wasting tokens) *right now*.
+
+**Documentation:** [https://docs.tokensentinel.dev](https://docs.tokensentinel.dev)
 
 ## What it catches
 
@@ -47,7 +49,7 @@ Native wrappers — `pip install token-sentinel[<provider>]`:
 | Google Gemini | `google-genai` | yes | yes |
 | AWS Bedrock | `boto3` | yes | sync only |
 
-¹ OpenAI streaming instrumentation shipped in stable release.
+¹ OpenAI streaming is fully instrumented; pass `stream_options={"include_usage": True}` for token counts on streams.
 
 Transparent through the OpenAI wrapper (just set `base_url`):
 
@@ -110,18 +112,26 @@ Per-provider deep dives — install, wrap, leak, stream, async, production:
 | Mode | Behavior |
 |---|---|
 | `log` | Emit events to your handler. Default. Safe for production from day one. |
-| `alert` | Same as `log` plus optional cloud-sink delivery for dashboards and webhooks. |
-| `block` | Raise `LeakDetected` to halt the agent at the next boundary. Opt-in. |
+| `alert` | Same handler behavior as `log` (cloud is separate — see below). |
+| `block` | Raise `LeakDetected` after the provider returns (halts the agent loop). Opt-in. |
+
+Cloud event shipping requires `cloud_endpoint` **and** `api_key` and works in **any** mode. Without those kwargs, nothing leaves the process.
 
 ## Works with MCP, RAG, and orchestration frameworks
 
 TokenSentinel instruments at the LLM-client layer, so it transparently catches traffic from MCP hosts, RAG pipelines, and orchestration frameworks (LangChain, LangGraph, CrewAI, AutoGen, Pydantic AI). See [docs/integration-patterns.md](docs/integration-patterns.md).
 
-## Cloud (optional)
+## Cloud (optional, paid, closed source)
 
-The hosted TokenSentinel Cloud is closed-source, opt-in, configured via the SDK's `cloud_endpoint=` and `api_key=` constructor args. Without those, nothing leaves the process. The cloud provides retention, a hosted dashboard, the **Intervention Pack** (budget caps + velocity ceilings + kill-switch), and on Pro: LLM-as-judge ratification, drift detection, trace consolidation, RBAC, audit logs, multi-environment routing, the cost estimator, and OAuth login.
+This repository is the **Apache-2.0 SDK only**. The commercial product is separate:
 
-Tier comparison and pricing are detailed on the official website: see [tokensentinel.dev](https://tokensentinel.dev) for the customer-facing tier story.
+| Free (this package) | Paid TokenSentinel Cloud |
+|---|---|
+| 15 rules, 9 providers, log/alert/block | Hosted dashboard, retention, webhooks |
+| Zero network by default | Intervention Pack: budgets, velocity, kill-switch |
+| Self-host friendly | Pro: judge, drift, composites, RBAC, chargeback |
+
+Configure cloud via `cloud_endpoint=` and `api_key=` on `Sentinel(...)`. Tier comparison and pricing: [tokensentinel.dev](https://tokensentinel.dev). Full user guide: [https://docs.tokensentinel.dev](https://docs.tokensentinel.dev).
 
 ## Migrate from Helicone / Langfuse / LangSmith
 
@@ -140,7 +150,7 @@ python -m tokensentinel_migrate helicone --helicone-api-key sk-... --tokensentin
 
 **Tests**: 912 SDK tests passing. Codebase is clean of ruff, mypy, and typecheck warnings.
 
-The public API surface (`Sentinel`, `wrap`, `on_leak`, `record_call`, `LeakEvent`, `CallRecord`, `LeakDetected`, plus the  enforcement exceptions `BudgetExceeded`, `VelocityExceeded`, `KillSwitchActive`) is stable and follows semver — pin to a minor version (e.g., `token-sentinel>=0.10,<0.11`) and upgrade deliberately.
+The public API surface (`Sentinel`, `wrap`, `on_leak` / `on_waste`, `record_call`, `session`, `LeakEvent` / `WasteEvent`, `CallRecord`, `LeakDetected` / `WasteDetected`, plus policy exceptions `BudgetExceeded`, `VelocityExceeded`, `KillSwitchActive`) is stable and follows semver — pin deliberately (e.g. `token-sentinel>=1.0,<2`).
 
 ## Architecture
 
@@ -151,18 +161,21 @@ rule detection runs entirely in-process. The composite rules and judge ratificat
 
 ## Docs
 
-User-facing docs (published with the OSS SDK):
+- **Hosted docs:** [https://docs.tokensentinel.dev](https://docs.tokensentinel.dev)
+- **Homepage:** [https://tokensentinel.dev](https://tokensentinel.dev)
 
-- [User Guide](docs/user/) — installation, quickstart, modes, leak rules, providers, integrations, API reference
+Also in this repository:
+
+- [User Guide](docs/user/) — installation, quickstart, modes, waste rules, providers, integrations, API reference
 - [Architecture](docs/architecture.md) — how the wrapper, tracer, and rules engine fit together
-- [Leak taxonomy](docs/waste-taxonomy.md) — the rules in detail with thresholds and false-positive hazards
+- [Waste taxonomy](docs/waste-taxonomy.md) — the rules in detail with thresholds and false-positive hazards
 - [Providers](docs/providers.md) — full matrix of supported providers
 - [Integration patterns](docs/integration-patterns.md) — MCP, RAG, LangChain, LangGraph, CrewAI, AutoGen, Pydantic AI
 - [Changelog](CHANGELOG.md)
 
 ## Contact & Support
 
-For support, feedback, or inquiries, please contact shakyasmreta@gmail.com or visit our official website at [tokensentinel.dev](https://tokensentinel.dev).
+For support, feedback, or inquiries: [shakyasmreta@gmail.com](mailto:shakyasmreta@gmail.com) · [tokensentinel.dev](https://tokensentinel.dev) · [docs.tokensentinel.dev](https://docs.tokensentinel.dev).
 
 ## License
 

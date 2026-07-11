@@ -297,7 +297,7 @@ def test_confidence_capped_at_0_99(make_call, now):
 
 
 # ---------------------------------------------------------------------------
-# False-positive hazards (per docs/04_leak_taxonomy.md)
+# False-positive hazards (per docs/waste-taxonomy.md)
 # ---------------------------------------------------------------------------
 
 

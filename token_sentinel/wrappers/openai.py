@@ -83,10 +83,11 @@ if TYPE_CHECKING:
 # one warning even on the same Sentinel.
 
 _BLOCK_MODE_STREAM_MESSAGE = (
-    "TokenSentinel: OpenAI streaming bypass -- mode='block' is not active "
-    "on streamed chat.completions.create calls. Use Anthropic, Gemini, or "
-    "Bedrock for block-mode-with-streaming. OpenAI streaming "
-    "instrumentation is tracked for the roadmap."
+    "TokenSentinel: OpenAI streaming instrumentation bypassed for this "
+    "call (stream proxy could not be constructed). mode='block' will not "
+    "raise LeakDetected for this stream; on_leak handlers also will not "
+    "see a CallRecord. Prefer fully consuming the stream or use a "
+    "supported client shape so the stream proxy can wrap iteration."
 )
 
 _WARNED_INSTANCES: weakref.WeakKeyDictionary[Sentinel, set[str]] = weakref.WeakKeyDictionary()

@@ -1,12 +1,27 @@
 # API reference
 
-Full reference for the TokenSentinel public surface. The public API is everything exported from `token_sentinel`:
+Public surface exported from `token_sentinel` (stable, semver-tracked):
 
 ```python
-from token_sentinel import Sentinel, LeakEvent, CallRecord, LeakDetected
+from token_sentinel import (
+    Sentinel,
+    CallRecord,
+    LeakEvent,
+    WasteEvent,       # alias of LeakEvent
+    LeakDetected,
+    WasteDetected,    # alias of LeakDetected
+    BudgetExceeded,
+    VelocityExceeded,
+    KillSwitchActive,
+    __version__,
+)
 ```
 
-These four names are the entire stable surface. Everything under `token_sentinel.tracer` and `token_sentinel.rules.*` is internal — pin to a minor version if you import those.
+Everything under `token_sentinel.tracer`, `token_sentinel.rules.*`, and `token_sentinel.wrappers.*` is internal — pin a minor version if you import those.
+
+`WasteEvent is LeakEvent` and `WasteDetected is LeakDetected` are true (transparent aliases). Prefer either naming style; both stay first-class.
+
+---
 
 ## `Sentinel`
 
@@ -28,199 +43,125 @@ class Sentinel:
         cloud_flush_interval_seconds: float = 5.0,
         cloud_batch_size: int = 50,
         cloud_queue_max: int = 1000,
+        # Optional cloud policy plane (Intervention Pack — paid cloud).
+        # Default: same URL as cloud_endpoint. Pass None to disable policy only.
+        policy_endpoint: str | None = ...,
+        policy_active_poll_seconds: float = 2.0,
+        policy_idle_poll_seconds: float = 5.0,
+        policy_failure_mode: Literal["open", "closed"] = "open",
+        # Optional Pro judge hints (forwarded as headers to cloud)
+        judge_threshold_low: float = 0.5,
+        judge_threshold_high: float = 0.8,
+        judge_calls_per_month_max: int = 1_800_000,
     ) -> None: ...
 
+    def wrap(self, client: T) -> T: ...
+    def on_leak(self, handler: Callable[[LeakEvent], None]) -> Callable[[LeakEvent], None]: ...
+    on_waste = on_leak  # brand alias
+    def unregister(self, handler: Callable[[LeakEvent], None]) -> bool: ...
+    def record_call(self, call: CallRecord) -> list[LeakEvent]: ...
+    def session(
+        self,
+        session_id: str | None = None,
+        *,
+        tags: dict[str, str] | None = None,
+    ) -> Session: ...
     def close(self, timeout: float = 5.0) -> bool: ...
 ```
 
-The main entry point. One `Sentinel` per logical project per process is the recommended pattern.
+One `Sentinel` per logical project per process is the recommended pattern.
 
 ### Constructor parameters
 
 All parameters are keyword-only.
 
-#### `project: str`
+| Parameter | Default | Description |
+|---|---|---|
+| `project` | required | Included on every `LeakEvent.project` |
+| `mode` | `"log"` | `log` / `alert` / `block` — see [Modes](./03-modes.md) |
+| `rules` | `"all"` | `"all"` or list of rule name strings (15 names below) |
+| `config` | `None` | Per-rule knobs as `"rule_name.key"` |
+| `cloud_endpoint` | `None` | Optional cloud base URL (no trailing `/v1/...`) |
+| `api_key` | `None` | Required with `cloud_endpoint` for cloud sink + default policy poller |
+| `min_confidence` | `0.5` | Drop events with lower confidence before handlers (clamped to \[0, 1\]) |
+| `max_records_per_session` | `200` | Ring buffer depth per session |
+| `max_sessions` | `1000` | LRU cap on sessions (`None` = unlimited) |
+| `dedup_window_seconds` | `5.0` | Suppress duplicate `(type, rule, evidence)` per session; `0` disables |
+| `cloud_flush_interval_seconds` | `5.0` | Cloud batch flush interval |
+| `cloud_batch_size` | `50` | Max events per POST |
+| `cloud_queue_max` | `1000` | In-memory cloud queue; drops oldest on overflow |
+| `policy_endpoint` | same as `cloud_endpoint` | Policy poll URL; pass `None` to disable policy while keeping event sink |
+| `policy_active_poll_seconds` | `2.0` | Policy poll while sessions marked active |
+| `policy_idle_poll_seconds` | `5.0` | Policy poll when idle |
+| `policy_failure_mode` | `"open"` | `"open"` = no policy after TTL; `"closed"` = synthetic kill-switch |
+| `judge_threshold_*` / `judge_calls_per_month_max` | see above | Forwarded to cloud as `X-Judge-*` headers (Pro-tier cloud feature) |
 
-Required. Identifier for this project, included on every emitted `LeakEvent.project`. Use it to disambiguate when one process runs multiple Sentinels (rare) or to route events downstream.
+**Cloud sink activation:** both `cloud_endpoint` and `api_key` must be set. When they are, events are POSTed in **every** mode (`log` included) — mode is stamped on the wire for cloud analytics; it does not gate shipping.
 
-```python
-Sentinel(project="checkout-agent")
-```
-
-#### `mode: Literal["log", "alert", "block"] = "log"`
-
-Behavior when a rule fires. See [Modes](./03-modes.md) for the full discussion.
-
-- `"log"` — call registered handlers; never raise.
-- `"alert"` — call handlers; also emit to cloud sink if configured.
-- `"block"` — call handlers; raise `LeakDetected` from the wrapped call.
-
-```python
-Sentinel(project="my-agent", mode="log")
-```
-
-#### `rules: list[str] | Literal["all"] = "all"`
-
-Which rules to run. `"all"` runs every V0 rule. Pass a list of rule names to enable a subset:
-
-```python
-Sentinel(project="my-agent", rules=["embedding_waste", "retry_storm"])
-```
-
-Valid rule names: `tool_loop`, `context_bloat`, `embedding_waste`, `zombie`, `model_misroute`, `retry_storm`, `tool_definition_bloat`, `retrieval_thrash`. Names not in this list are silently ignored.
-
-#### `config: dict[str, Any] | None = None`
-
-Per-rule configuration. Keys follow the pattern `"<rule_name>.<config_key>"`:
-
-```python
-Sentinel(
-    project="my-agent",
-    config={
-        "tool_loop.cosine_threshold": 0.80,
-        "tool_loop.min_calls": 5,
-        "context_bloat.slope_threshold": 3000,
-        "retry_storm.min_retries": 10,
-        "retrieval_thrash.cosine_threshold": 0.75,
-    },
-)
-```
-
-See [Leak rules](./04-waste-rules.md) for every rule's config keys and defaults.
-
-Unknown keys are silently ignored — typos won't crash, but they also won't take effect. Verify by inspecting the rule's behavior or by reading rule source if you suspect a key isn't being applied.
-
-#### `cloud_endpoint: str | None = None`
-
-Optional URL for the cloud sink. When set, `mode="alert"` and `mode="block"` will fire-and-forget POST events to `{cloud_endpoint}/v1/events`. Network failures never block the agent.
-
-```python
-Sentinel(project="my-agent", mode="alert", cloud_endpoint="https://api.tokensentinel.dev")
-```
-
-The cloud is opt-in. The SDK is fully functional without it. See [FAQ](./09-faq.md#cloud-vs-oss) for the OSS-vs-cloud split.
-
-#### `api_key: str | None = None`
-
-API key for the cloud sink. Required when `cloud_endpoint` is set; ignored otherwise.
-
-```python
-Sentinel(project="my-agent", cloud_endpoint="https://cloud.example.com", api_key="ts_...")
-```
-
-#### `min_confidence: float = 0.5`
-
-Project-wide confidence floor. Events with `confidence < min_confidence` are dropped silently before reaching handlers. Default `0.5`.
-
-```python
-Sentinel(project="my-agent", min_confidence=0.7)  # only high-confidence events
-```
-
-This is independent of `mode` — handlers see only events at or above `min_confidence`, regardless of whether you're in `log`, `alert`, or `block`.
+**Unknown rule names** in `rules=[...]` emit a `UserWarning` and are ignored (not a hard error).
 
 ### Methods
 
-#### `Sentinel.wrap(client: T) -> T`
+#### `wrap(client) -> client`
 
-Wraps an LLM client in place and returns it. The returned object is the same `client` you passed in — wrappers mutate methods on the live instance, so all your IDE type hints continue to work.
+Mutates the live client in place and returns it (IDE types preserved). Supported families: Anthropic, OpenAI (+ compatible), Gemini, Bedrock, Voyage, Cohere V2, Replicate, Deepgram, ElevenLabs. Raises `TypeError` if unsupported or accessors are missing.
 
-```python
-import anthropic
-from token_sentinel import Sentinel
+Every instrumented method accepts `_sentinel_session_id=` (stripped before the provider SDK).
 
-sentinel = Sentinel(project="my-agent")
-client = sentinel.wrap(anthropic.Anthropic())
-# `client` is the same anthropic.Anthropic, with messages.create / messages.stream instrumented.
-```
+#### `on_leak` / `on_waste`
 
-**Supported client types** (dispatched by `type(client).__module__`):
+Register a sync handler. Multiple handlers run in registration order. Handler exceptions are swallowed. `BaseException` (`KeyboardInterrupt`, `SystemExit`) propagates.
 
-- Anthropic: `anthropic.Anthropic`, `anthropic.AsyncAnthropic`.
-- OpenAI: `openai.OpenAI`, `openai.AsyncOpenAI`. Also covers any OpenAI-compatible base_url (DeepSeek, Together, Fireworks, Groq, OpenRouter, Anyscale, Mistral, Perplexity, vLLM, Ollama, TGI, LM Studio).
-- Google Gemini: `google.genai.Client` (direct API or Vertex backend).
-- AWS Bedrock: `boto3.client("bedrock-runtime")`.
+#### `unregister(handler) -> bool`
 
-If the client type is not recognized, raises `TypeError`. If the SDK is on an unexpected version such that the dispatcher doesn't recognize the module prefix, raises `TypeError` — upgrade to the version listed in [Installation](./01-installation.md).
+Remove a previously registered handler. Returns whether it was found.
 
-**Calling wrapped methods.** Every wrapped method accepts an extra `_sentinel_session_id` kwarg that is stripped before reaching the SDK:
+#### `record_call(call) -> list[LeakEvent]`
 
-```python
-client.messages.create(
-    model="claude-sonnet-4-6",
-    max_tokens=1024,
-    messages=[...],
-    _sentinel_session_id="user-42-task-17",  # group calls into one logical session
-)
-```
+Record a call, enforce optional cloud policy, run rules, dispatch handlers (and cloud), optionally raise in `block` mode. Used by all wrappers.
 
-Without `_sentinel_session_id`, each call gets a fresh UUID — useful only for one-shot calls. For any rule that detects patterns, set a stable session id.
+Order inside `record_call`:
 
-#### `Sentinel.on_leak(handler: Callable[[LeakEvent], None]) -> Callable[[LeakEvent], None]`
+1. Policy checks (if configured) — may raise `KillSwitchActive` / `BudgetExceeded` / `VelocityExceeded` **regardless of mode**
+2. Append to tracer
+3. Evaluate rules → confidence clamp / `min_confidence` / tag stamp
+4. Dedup
+5. Handlers + cloud enqueue
+6. If `mode=="block"` and any events → `LeakDetected` (highest confidence)
 
-Register a leak event handler. Returns the handler unchanged, so it works as a decorator:
+#### `session(session_id=None, *, tags=None) -> Session`
+
+Open a logical session with optional chargeback tags.
+
+Allowed tag keys: `team`, `feature`, `customer`, `environment`, `version`.  
+Values: URL-safe `^[a-zA-Z0-9._-]+$`, ≤64 chars, ≤8 entries.
 
 ```python
-sentinel = Sentinel(project="my-agent")
-
-@sentinel.on_leak
-def handle(event: LeakEvent) -> None:
-    print(f"LEAK [{event.type}] confidence={event.confidence:.2f}")
+sess = sentinel.session(tags={"team": "growth", "feature": "chat"})
+# Use sess.session_id as _sentinel_session_id on wrapped calls.
+# sess.record_call(call) stamps tags when CallRecord.tags is empty.
 ```
 
-You can register multiple handlers; they run in registration order. Exceptions in one handler do not block others — they are caught and swallowed.
+#### `close(timeout=5.0) -> bool`
 
-Handlers run synchronously in the wrapped call's thread *after* the underlying API response has been received. Keep them short — long-running handlers add to the wrapped call's perceived latency.
-
-For async work, dispatch to a queue inside the handler:
-
-```python
-import asyncio
-queue: asyncio.Queue[LeakEvent] = asyncio.Queue()
-
-@sentinel.on_leak
-def handle(event):
-    queue.put_nowait(event)
-```
-
-#### `Sentinel.record_call(call: CallRecord) -> list[LeakEvent]`
-
-Direct injection — records a `CallRecord` and runs all rules against the session buffer. Returns the list of `LeakEvent` that fired (after `min_confidence` filtering). Handlers are also dispatched.
-
-This is the path used by every wrapper internally. You generally don't call it directly — but it's useful for:
-
-- Synthetic test data (`examples/tool_loop_demo.py`).
-- Custom providers not yet covered by a wrapper. Build a `CallRecord` from your provider's response and hand it to `record_call`.
-- Replay testing — feed historical traces back through the rules engine.
-
-```python
-from datetime import datetime, timezone
-from token_sentinel import CallRecord
-
-call = CallRecord(
-    session_id="my-session",
-    timestamp=datetime.now(timezone.utc),
-    provider="custom",
-    model="my-model",
-    method="generate",
-    prompt_tokens=120,
-    completion_tokens=40,
-    latency_ms=320.5,
-    request_hash="...",
-)
-events = sentinel.record_call(call)
-```
-
-In `mode="block"`, `record_call` may raise `LeakDetected` — either let it propagate (matching the wrapper's behavior) or catch it explicitly.
+Flush cloud sink and stop policy poller. Optional for short scripts; recommended for long-lived workers before exit.
 
 ### Attributes
 
-- `sentinel.project: str` — the project string passed in.
-- `sentinel.mode: str` — the mode.
-- `sentinel.config: dict[str, Any]` — the config dict.
-- `sentinel.min_confidence: float` — the confidence floor.
-- `sentinel.tracer: Tracer` — internal tracer (see below).
+- `project`, `mode`, `config`, `min_confidence`
+- `tracer` — internal ring buffer (not a stable API; useful in tests)
 
-The tracer is an internal class — its `record`, `session`, `clear` methods exist but are not part of the stable API. We expose `sentinel.tracer.clear(session_id)` for tests and demos.
+---
+
+## `Session`
+
+Lightweight handle from `Sentinel.session()`:
+
+- `session_id: str`
+- `tags: dict[str, str]`
+- `record_call(call: CallRecord) -> list[LeakEvent]` — stamps `session_id` / tags when empty
+
+No `close()` — sessions age out via `max_sessions` LRU.
 
 ---
 
@@ -242,29 +183,25 @@ class CallRecord:
     user_facing_output: bool = False
     raw_request: dict[str, Any] = field(default_factory=dict)
     raw_response_meta: dict[str, Any] = field(default_factory=dict)
+    usage_extra: dict[str, Any] = field(default_factory=dict)
+    tags: dict[str, str] = field(default_factory=dict)
 ```
 
-A captured LLM API call. Wrappers build these from the SDK's request/response; rules read them. You only construct one directly when injecting test data via `Sentinel.record_call`.
-
-| Field | Type | Description |
-|---|---|---|
-| `session_id` | str | Logical session this call belongs to. Defaults to a per-call UUID inside wrappers; pass `_sentinel_session_id` to override. |
-| `timestamp` | datetime | UTC timestamp the call was made. |
-| `provider` | str | `"anthropic"`, `"openai"`, `"gemini"`, or `"bedrock"`. OpenAI-compatible providers (DeepSeek, vLLM, etc.) come through as `"openai"`. |
-| `model` | str | Model identifier from the request — `"claude-sonnet-4-6"`, `"gpt-5"`, `"gemini-2.5-pro"`, `"anthropic.claude-sonnet-4-5-v2:0"`, etc. |
-| `method` | str | SDK method called: `"messages.create"`, `"messages.stream"`, `"chat.completions.create"`, `"embeddings.create"`, `"models.generate_content"`, `"models.generate_content_stream"`, `"converse"`, or `"converse_stream"`. |
-| `prompt_tokens` | int | Input token count from the response's usage metadata. |
-| `completion_tokens` | int | Output token count from the response's usage metadata. For embeddings, always 0. |
-| `latency_ms` | float | Wall-clock latency of the underlying SDK call in milliseconds. |
-| `request_hash` | str | SHA-256 hex digest of `(model, messages, tools, max_tokens)` (Anthropic / OpenAI / Gemini) or `(modelId, messages, toolConfig, inferenceConfig)` (Bedrock). Stable across retries. Used by `retry_storm`. |
-| `tool_calls` | list[dict] | Tool calls in the response, normalized to `[{"name": str, "arguments": dict | str}, ...]` across all providers. Used by `tool_loop` and `retrieval_thrash`. |
-| `user_facing_output` | bool | True iff the response contains text content and no tool calls. Used by `zombie`. |
-| `raw_request` | dict | Provider-specific request shape: `{"messages": ..., "tools": ..., "max_tokens": ...}` for Anthropic/OpenAI; `{"model": ..., "contents": ..., "tools": ...}` for Gemini; `{"modelId": ..., "messages": ..., "toolConfig": ...}` for Bedrock; `{"input": ..., "model": ...}` for embeddings. Used by `tool_definition_bloat`, `embedding_waste`, `model_misroute`. |
-| `raw_response_meta` | dict | Small response metadata. Anthropic: `{"stop_reason": ..., "streamed": bool}`. OpenAI: `{"finish_reason": ...}`. Gemini: `{"finish_reason": ...}`. Bedrock: `{"stopReason": ...}`. |
+| Field | Description |
+|---|---|
+| `provider` | e.g. `anthropic`, `openai`, `gemini`, `bedrock`, `voyage`, `cohere`, `replicate`, `deepgram`, `elevenlabs` |
+| `method` | e.g. `messages.create`, `chat.completions.create`, `embeddings.create`, `embed`, `rerank`, `converse`, `transcribe_file`, `text_to_speech.convert`, … |
+| `request_hash` | Stable hash of the call shape for `retry_storm` / `rerank_thrash` |
+| `tool_calls` | `[{"name": str, "arguments": dict\|str}, ...]` |
+| `user_facing_output` | Typically true when response has text and no tool calls |
+| `raw_request` | Provider-shaped request fragment used by rules |
+| `raw_response_meta` | Stop reason, `streamed`, `usage_unavailable`, `prompt_tokens_details`, … |
+| `usage_extra` | Non-token billing: `dimension_kind`, `dimension_value`, optional `model_specific_meta` |
+| `tags` | Chargeback tags from `Session` / enrichers |
 
 ---
 
-## `LeakEvent`
+## `LeakEvent` / `WasteEvent`
 
 ```python
 @dataclass
@@ -277,132 +214,100 @@ class LeakEvent:
     evidence: dict[str, Any]
     estimated_burn: float
     suggested_action: str
-    raised_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    raised_at: datetime = ...
+    metadata: dict[str, Any] = field(default_factory=dict)
+    tags: dict[str, str] = field(default_factory=dict)
 ```
 
-A waste signal emitted by a rule. Passed to your `on_leak` handler and (in `block` mode) attached to the `LeakDetected` exception.
+`type` is one of the fifteen rule types (or policy types when raised via policy exceptions):
 
-| Field | Type | Description |
+```
+tool_loop, context_bloat, embedding_waste, zombie, model_misroute,
+retry_storm, tool_definition_bloat, retrieval_thrash,
+vision_re_upload, vision_high_detail_misroute, vision_cost_concentration,
+audio_multichannel_doubling, voice_switching_loop, rerank_thrash, repair_loop
+```
+
+Policy-originated events may use `kill_switch`, `budget_exceeded`, `velocity_exceeded`.
+
+`metadata` may later carry cloud judge verdicts when events round-trip through paid cloud. SDK rules leave it empty.
+
+`str(event)` includes type, confidence, burn, rule, `session_id`, and evidence **keys** (not values — privacy).
+
+---
+
+## Exceptions
+
+### `LeakDetected` / `WasteDetected`
+
+Raised in `mode="block"` after handlers run, with the highest-confidence event on `exc.event`.
+
+### `BudgetExceeded`, `VelocityExceeded`, `KillSwitchActive`
+
+Subclasses of `LeakDetected`. Raised from `record_call` when a cloud **policy** is active — **independent of `mode`**. Only relevant if you configure cloud + policy (paid Team+ tiers on TokenSentinel Cloud).
+
+| Exception | When |
+|---|---|
+| `KillSwitchActive` | Operator kill-switch on |
+| `BudgetExceeded` | Projected session USD burn would exceed policy budget |
+| `VelocityExceeded` | Projected tokens/min would exceed policy cap |
+
+**Important:** wrappers invoke the provider **before** `record_call`. Policy raises cannot un-bill the call that just completed; they stop your agent from treating the response as success / continuing the loop. See [Modes](./03-modes.md).
+
+---
+
+## Rule names and config keys
+
+| Rule | Config keys (prefix with `rule_name.`) | Typical confidence |
 |---|---|---|
-| `type` | str | Leak class. One of `tool_loop`, `context_bloat`, `embedding_waste`, `zombie`, `model_misroute`, `retry_storm`, `tool_definition_bloat`, `retrieval_thrash`. |
-| `confidence` | float | 0.0–1.0. Below `Sentinel.min_confidence` the event is dropped before reaching handlers. |
-| `project` | str | The `project` string from the `Sentinel` that emitted this. |
-| `session_id` | str | The session id this leak was detected in. Matches the originating `CallRecord.session_id`. |
-| `rule` | str | Which rule fired, prefixed with the rules-engine version (e.g. `v0.tool_loop`). |
-| `evidence` | dict | Rule-specific payload describing why the rule fired. Keys differ per rule — see [Leak rules](./04-waste-rules.md) for each rule's evidence schema. |
-| `estimated_burn` | float | Rough USD figure for the wasted spend this leak represents. Treat as a sort key, not an invoice. For self-hosted endpoints this is not meaningful — see [Providers](./05-providers.md#self-hosted-cost-counter-caveat). |
-| `suggested_action` | str | Machine-readable hint for what to do — `route_to_claude-haiku-4-5`, `add_embedding_cache`, `pause_for_human_review`, etc. |
-| `raised_at` | datetime | UTC timestamp the event was emitted by the rule. |
+| `tool_loop` | `window_seconds`, `min_calls`, `cosine_threshold`, `similarity_metric`, `charngram_size`, `include_raw_args`, `max_arg_bytes`, `max_total_corpus_bytes` | 0.6–0.99 |
+| `context_bloat` | `lookback_turns`, `slope_threshold`, `min_turns` | 0.55–0.95 |
+| `embedding_waste` | (none) | 0.99 |
+| `zombie` | `threshold_minutes`, `min_recent_calls` | 0.75 |
+| `model_misroute` | `max_prompt_tokens`, `max_completion_tokens` | 0.7 |
+| `retry_storm` | `window_seconds`, `min_retries` | 0.9 |
+| `tool_definition_bloat` | `tool_count_threshold`, `tool_definition_bytes_threshold`, `max_tool_bytes`, `max_total_bytes`, `redact_names` | 0.85 / 0.95 |
+| `retrieval_thrash` | same similarity knobs as tool_loop + `retrieval_tool_patterns` | 0.55–0.95 |
+| `vision_re_upload` | `window_seconds`, `min_calls`, `max_image_bytes` | 0.65–0.99 |
+| `vision_high_detail_misroute` | `max_completion_tokens` | 0.75 |
+| `vision_cost_concentration` | `image_share_threshold`, `max_completion_tokens` | 0.65 |
+| `audio_multichannel_doubling` | (none) | 0.75 / 0.85 |
+| `voice_switching_loop` | `window_seconds`, `min_voices` | 0.7–0.9 |
+| `rerank_thrash` | `window_seconds`, `min_calls` | 0.75–0.9 |
+| `repair_loop` | `window_turns`, `min_corrections`, `similarity_threshold`, `length_ratio` | 0.65–0.9 |
 
-`LeakEvent.__str__` returns a short summary:
+Full semantics: [Leak rules](./04-waste-rules.md).
 
 ```python
-str(event)  # 'LeakEvent(type=tool_loop, confidence=0.84, burn=$0.0324, rule=v0.tool_loop)'
+Sentinel(
+    project="my-agent",
+    rules=["embedding_waste", "retry_storm", "rerank_thrash"],
+    config={"tool_loop.cosine_threshold": 0.80},  # ignored if tool_loop not loaded
+)
 ```
 
 ---
 
-## `LeakDetected`
+## Enrichers (optional extras)
+
+Not re-exported from the package root; import explicitly after installing the extra:
 
 ```python
-class LeakDetected(Exception):
-    event: LeakEvent
-    def __init__(self, event: LeakEvent) -> None: ...
+# pip install token-sentinel[langchain]
+from token_sentinel.enrichers.langchain import TokenSentinelCallbackHandler
+
+# pip install token-sentinel[otel]
+from token_sentinel.enrichers.otel import TokenSentinelSpanProcessor
 ```
 
-Raised by the wrapper when `Sentinel.mode == "block"` and a leak fires.
-
-```python
-from token_sentinel import Sentinel, LeakDetected
-import anthropic
-
-sentinel = Sentinel(project="my-agent", mode="block")
-client = sentinel.wrap(anthropic.Anthropic())
-
-try:
-    response = client.messages.create(model="claude-sonnet-4-6", messages=[...])
-except LeakDetected as exc:
-    print(f"Blocked: {exc.event.type} ({exc.event.confidence:.2f})")
-    # exc.event is the LeakEvent that caused the block
-    # exc.event.evidence has the rule-specific details
-```
-
-The exception is raised *after* the underlying LLM call has already returned (the call's response is built into the rule input). Block mode halts the *next* call in a degenerate loop — see [Modes — `block` mode](./03-modes.md#block-mode-hard-stop) for caveats.
+See [Integrations](./06-integrations.md).
 
 ---
 
-## Rule names and config keys (cheat sheet)
+## Stability
 
-| Rule | Name | Config keys | Confidence |
-|---|---|---|---|
-| Tool loop | `tool_loop` | `window_seconds`, `min_calls`, `cosine_threshold`, `similarity_metric`, `charngram_size` | 0.6–0.99 |
-| Context bloat | `context_bloat` | `lookback_turns`, `slope_threshold`, `min_turns` | 0.55–0.95 |
-| Embedding waste | `embedding_waste` | (none) | 0.99 |
-| Zombie agent | `zombie` | `threshold_minutes`, `min_recent_calls` | 0.75 |
-| Model misroute | `model_misroute` | `max_prompt_tokens`, `max_completion_tokens` | 0.7 |
-| Retry storm | `retry_storm` | `window_seconds`, `min_retries` | 0.9 |
-| Tool definition bloat | `tool_definition_bloat` | `tool_count_threshold`, `tool_definition_bytes_threshold` | 0.85 / 0.95 |
-| Retrieval thrash | `retrieval_thrash` | `window_seconds`, `min_calls`, `cosine_threshold`, `similarity_metric`, `charngram_size`, `retrieval_tool_patterns` | 0.55–0.95 |
+**Stable:** `Sentinel` public methods and constructor kwargs listed above; `CallRecord` / `LeakEvent` field names; exception types; rule **names** and documented config keys.
 
-Config key format in the `config` dict is `"<rule_name>.<key>"` — for example, `"tool_loop.cosine_threshold": 0.80`.
+**Not stable:** tracer/rule/wrapper internals; exact confidence formulas; `suggested_action` string wording; cloud wire extras.
 
-See [Leak rules](./04-waste-rules.md) for default values, semantics, and tuning examples.
-
----
-
-## Module-level constants
-
-These are not in the public `__all__` but are documented because users sometimes need them:
-
-- `token_sentinel.__version__` — current version string (e.g., `"0.4.0"`).
-- `token_sentinel.tracer.Tracer` — the in-process ring buffer. Internal class (subject to change). The `Sentinel` constructor exposes `max_records_per_session=` (default 200) and `max_sessions=` (default 1000) for the most common tuning needs — prefer those over instantiating `Tracer` directly.
-
-The full list of valid rule-name strings:
-
-```python
-{
-    "tool_loop",
-    "context_bloat",
-    "embedding_waste",
-    "zombie",
-    "model_misroute",
-    "retry_storm",
-    "tool_definition_bloat",
-    "retrieval_thrash",
-}
-```
-
----
-
-## Type hints
-
-All public types are exported with full annotations and play well with mypy/pyright. The wrappers use `functools.wraps` and live-instance mutation, so calls to wrapped methods retain the original SDK's signatures and return types.
-
-If you hit a type-checking issue with wrapped clients, it is almost certainly because:
-
-1. You are casting to a narrower type after wrapping. Drop the cast.
-2. Your IDE has cached an older stub. Restart the language server.
-
-The wrapper internals use `# type: ignore[method-assign]` because mutating instance methods is a deliberate type violation that the SDKs themselves rely on. Your code that consumes wrapped clients does not need any `type: ignore`.
-
----
-
-## Stability guarantees
-
-**Stable** (semver-tracked):
-
-- `Sentinel` class: constructor parameters, `wrap`, `on_leak`, `record_call`.
-- `LeakEvent` dataclass: field names and types.
-- `CallRecord` dataclass: field names and types.
-- `LeakDetected` exception: structure and behavior.
-- The set of rule names and their config keys.
-
-**Not stable** (may change in minor versions):
-
-- `token_sentinel.tracer.Tracer` internals.
-- Individual rule classes under `token_sentinel.rules.*`.
-- The exact numeric values of confidence scores within a rule (we tune them).
-- The precise wording of `suggested_action` strings (the format is stable, the contents may evolve).
-- Wrapper internals (`token_sentinel.wrappers.*`).
-
-If you depend on something not on the stable list, pin to a minor version.
+`__version__` is the installed package version string (e.g. `"1.0.0"`).

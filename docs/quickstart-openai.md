@@ -79,7 +79,7 @@ The handler receives a `LeakEvent` dataclass with these fields:
 
 | Field | Type | What it is |
 |---|---|---|
-| `type` | str | One of the eight V0 rule types (or composite types fired cloud-side) |
+| `type` | str | One of the fifteen rule types (or composite types fired cloud-side) |
 | `confidence` | float | 0.0-1.0; below `min_confidence` (default 0.5) the event is dropped |
 | `project` | str | What you passed to `Sentinel(project=...)` |
 | `session_id` | str | Identifies a single agent run |

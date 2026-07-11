@@ -233,7 +233,7 @@ def test_openai_function_shape_top_tools(make_call, now):
 
 
 # ---------------------------------------------------------------------------
-# False-positive hazards (per docs/04_leak_taxonomy.md §7)
+# False-positive hazards (per docs/waste-taxonomy.md §7)
 # ---------------------------------------------------------------------------
 
 
