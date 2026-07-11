@@ -1,18 +1,23 @@
 # TokenSentinel User Guide
 
-TokenSentinel catches token waste in AI agents *mid-run* — before your bill arrives — and gives your application a callback to log, alert, or hard-stop the agent.
+TokenSentinel is an **open-source Python SDK** that detects token waste in AI agents while a session is still active, and gives your app a callback to log, alert, or hard-stop the agent before the *next* call goes out.
 
-It is a Python SDK that wraps the official LLM clients (Anthropic, OpenAI, Gemini, Bedrock, plus everything OpenAI-compatible). Eight deterministic rules watch the call stream for the patterns that account for most agent token waste in the wild: tool loops, context bloat, embedding waste, zombie agents, model misroutes, retry storms, tool-definition bloat, and retrieval thrash.
-
-This guide is for developers integrating TokenSentinel into their application. It assumes you have a working LLM-calling Python codebase and want to understand how the SDK behaves before you ship it to production.
+Detection runs **after** each provider response (that call is already billed). Intervention saves subsequent turns. Pair the free SDK with optional **TokenSentinel Cloud** (closed source, paid) for dashboards, policy enforcement, and Pro calibration — nothing phones home unless you set `cloud_endpoint` and `api_key`.
 
 ## Who this is for
 
-- Backend engineers running agents in production who want to know which agent is leaking *right now*, not which agent leaked last month.
-- Platform teams owning shared LLM infrastructure who need automated guardrails for tenant misuse.
-- AI engineers tuning agents who want a fast, deterministic signal during development that an iteration loop is degenerating.
+- Backend engineers running agents in production who want waste signals *during* a run
+- Platform teams that need guardrails without shipping a full observability stack first
+- OSS and self-hosted users who want rules with zero cloud dependency
 
-If you only want post-hoc cost analysis, a traditional observability tool (Langfuse, LangSmith, Helicone, Datadog LLM) covers that better. TokenSentinel sits in the call path so it can intervene before the meter spins.
+If you only want post-hoc cost analytics, tools like Langfuse / LangSmith / Helicone / Datadog LLM may fit better. TokenSentinel sits in the client call path.
+
+## What ships in the free SDK
+
+- **15** deterministic in-process rules (tool loops, context bloat, embedding waste, zombies, misroutes, retries, MCP tool-def bloat, RAG thrash, vision, audio multichannel, voice switching, rerank thrash, repair loops)
+- **9** native provider families + OpenAI-compatible endpoints
+- Modes: `log` | `alert` | `block`
+- Optional LangChain callback + OpenTelemetry span enrichers
 
 ## 30-second quickstart
 
@@ -26,50 +31,48 @@ import anthropic
 
 sentinel = Sentinel(project="my-agent", mode="log")
 
-@sentinel.on_leak
+@sentinel.on_leak  # or @sentinel.on_waste
 def handle(event):
-    print(f"LEAK [{event.type}] confidence={event.confidence:.2f} burn=${event.estimated_burn:.4f}")
+    print(f"[{event.type}] confidence={event.confidence:.2f} burn=${event.estimated_burn:.4f}")
 
 client = sentinel.wrap(anthropic.Anthropic())
-# Use `client` exactly as you would a normal anthropic.Anthropic.
 ```
 
-That's the whole integration. `mode="log"` is safe for production from day one — Sentinel only emits to your handler. To halt agents on detection, switch to `mode="block"` (see [Modes](./03-modes.md)).
+`mode="log"` is safe for production day one. See [Modes](./03-modes.md) before enabling `block`.
 
 ## Contents
 
-1. [Installation](./01-installation.md) — pip extras, Python version, how to verify your install.
-2. [Quickstart](./02-quickstart.md) — five-minute end-to-end tutorial with a real client and a synthetic leak.
-3. [Modes](./03-modes.md) — `log` / `alert` / `block`, when to use each, the graduation pattern.
-4. [Leak rules](./04-waste-rules.md) — what each of the eight rules detects, default thresholds, and how to tune.
-5. [Providers](./05-providers.md) — Anthropic, OpenAI, Gemini, Bedrock, OpenAI-compatible, self-hosted. Pick yours.
-6. [Integrations](./06-integrations.md) — MCP hosts, RAG pipelines, LangChain, LangGraph, CrewAI, AutoGen, Pydantic AI.
-7. [API reference](./07-api-reference.md) — full kwarg-by-kwarg reference for `Sentinel`, `CallRecord`, `LeakEvent`.
-8. [Troubleshooting](./08-troubleshooting.md) — what to check when a rule didn't fire, did fire incorrectly, or your overhead is high.
-9. [FAQ](./09-faq.md) — pricing direction, cloud vs OSS, comparisons to other tools, contributing.
+1. [Installation](./01-installation.md) — extras, Python version, OSS vs cloud
+2. [Quickstart](./02-quickstart.md) — end-to-end with a real client
+3. [Modes](./03-modes.md) — `log` / `alert` / `block`, cloud axis, policy notes
+4. [Waste rules](./04-waste-rules.md) — all 15 rules, thresholds, tuning
+5. [Providers](./05-providers.md) — native + OpenAI-compatible matrix
+6. [Integrations](./06-integrations.md) — MCP, RAG, LangChain, OTel, frameworks
+7. [API reference](./07-api-reference.md) — public surface
+8. [Troubleshooting](./08-troubleshooting.md) — common failures
+9. [FAQ](./09-faq.md) — OSS vs paid cloud, comparisons, contributing
 
-## Where things live
+## Also in this repository
 
 | Item | Location |
 |---|---|
-| SDK source | `token_sentinel/` |
-| User docs (this guide) | `docs/user/` |
+| Architecture | [`docs/architecture.md`](../architecture.md) |
+| Waste taxonomy (design depth) | [`docs/waste-taxonomy.md`](../waste-taxonomy.md) |
 | Examples | `examples/` |
 | Changelog | `CHANGELOG.md` |
 | License | `LICENSE` (Apache-2.0) |
 
-## Conventions in this guide
+## Conventions
 
-- **Code samples are runnable.** Every snippet uses real model names and real provider SDK shapes. If a snippet does not run for you, it is a documentation bug — please open an issue.
-- **No marketing.** This guide is technical reference, not pitch material.
-- **Defaults erred toward fewer false positives.** The eight rules are tuned to under-fire rather than over-fire. If you want stricter detection, lower thresholds. If you want quieter behavior, raise them or disable rules per-project.
+- **Runnable samples** with real SDK shapes
+- **Defaults favor fewer false positives** — tune thresholds up or disable rules per project
+- **Cloud pricing and dashboard UX** live on the product site, not in this OSS guide
 
 ## Stability
 
-The SDK is in stable 1.0.0 release. The public surface — `Sentinel`, `Sentinel.wrap`, `Sentinel.on_leak`, `Sentinel.record_call`, `LeakEvent`, `CallRecord`, `LeakDetected` — is stable and we follow semver: breaking changes will get a major version bump. Internal modules (`token_sentinel.tracer`, `token_sentinel.rules.*`, `token_sentinel.cloud_client`, `token_sentinel.wrappers.*`) are not stable yet — pin to a minor version if you depend on them directly.
+Package version **1.0.0+**. Public API: `Sentinel`, `wrap`, `on_leak` / `on_waste`, `record_call`, `session`, `close`, `CallRecord`, `LeakEvent` / `WasteEvent`, `LeakDetected` / `WasteDetected`, policy exceptions. Semver applies. Internal modules may change between minors.
 
 ## Getting help
 
-- Bug reports and feature requests: GitHub Issues
-- Discussions: GitHub Discussions
-- Security disclosures: open a GitHub Security Advisory on the repository for private disclosure.
+- Bug reports / features: GitHub Issues on this repository
+- Security: GitHub Security Advisory on the repository

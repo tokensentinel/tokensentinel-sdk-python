@@ -10,11 +10,17 @@ sentinel = Sentinel(project="my-agent", mode="block")
 
 | Mode | What it does | When to use |
 |---|---|---|
-| `log` | Calls your registered `on_leak` handlers. Never raises. | Day-one production. Always. |
-| `alert` | Same as `log` plus emits to the cloud dashboard and webhooks (cloud feature, optional). | Once you have handlers shipping events somewhere durable and want richer dashboards. |
-| `block` | Same as `log` plus raises `LeakDetected` to halt the wrapped call's caller. | Once a specific rule has been firing cleanly in `log` for a while and you trust it to short-circuit. |
+| `log` | Calls your registered `on_leak` / `on_waste` handlers. Never raises for rules. | Day-one production. Always. |
+| `alert` | Same handler behavior as `log`. Historically named for “cloud-oriented” deployments; **does not by itself enable cloud**. | Same as `log` unless your team uses the name as a convention. |
+| `block` | Same as `log` plus raises `LeakDetected` / `WasteDetected` after handlers. | Once a rule has been trustworthy in `log` and you have a recovery path. |
 
-The modes are **strictly additive in severity** — anything that happens in `log` also happens in `alert` and `block`. You always get your handlers called.
+Handlers always run when a rule fires (subject to `min_confidence` and dedup). Cloud delivery is a **separate axis** — see below.
+
+### Cloud delivery is orthogonal to mode
+
+If you set **both** `cloud_endpoint` and `api_key`, the SDK ships events to TokenSentinel Cloud in **`log`, `alert`, and `block`**. Mode is stamped on each event for cloud analytics (e.g. savings weighting). If cloud is not configured, `alert` behaves like `log` locally.
+
+Cloud is **optional, closed-source, and paid** (Team / Pro / Enterprise). The Apache-2.0 SDK never phones home without those two kwargs.
 
 ## `log` mode (default — safe for prod from day 1)
 
@@ -37,12 +43,13 @@ client.messages.create(model="claude-sonnet-4-6", max_tokens=10, messages=[...])
 
 This is what you should ship first. Always. Even if you ultimately want `block`.
 
-## `alert` mode (cloud-augmented logging)
+## `alert` mode
 
 ```python
 sentinel = Sentinel(
     project="my-agent",
     mode="alert",
+    # Optional paid cloud — works in log/alert/block when both are set:
     cloud_endpoint="https://api.tokensentinel.dev",
     api_key="ts_live_...",
 )
@@ -52,14 +59,9 @@ def handle(event):
     print(f"LEAK [{event.type}] {event.confidence:.2f}")
 ```
 
-`alert` adds two things on top of `log`:
+Locally, `alert` is the same as `log`: handlers run, no raise. Use it if your org’s runbooks already say “alert mode” for cloud-connected agents.
 
-1. Events are also POSTed to the configured `cloud_endpoint`, batched and fire-and-forget (network failures don't block your agent).
-2. The cloud dashboard runs its own webhook routing — Slack, PagerDuty, Linear, custom HTTPS, etc. — keyed off rule type and severity.
-
-`alert` is functionally a superset of `log`: your handlers still fire identically. If you don't configure `cloud_endpoint` and `api_key`, `alert` behaves exactly like `log` (the cloud sink degrades silently).
-
-The cloud dashboard is closed-source and optional. The SDK works perfectly without it; you just won't get the hosted dashboards / retention / team features. See the [FAQ](./09-faq.md) for the OSS-vs-cloud split.
+With cloud configured (any mode), the SDK fire-and-forgets batched POSTs to `{cloud_endpoint}/v1/events`. Network failures never block the agent. The hosted dashboard (webhooks, retention, Intervention Pack, Pro judge/composites) is closed-source — see [FAQ](./09-faq.md#open-source-sdk-vs-paid-cloud) and [tokensentinel.dev](https://tokensentinel.dev).
 
 ## `block` mode (hard-stop)
 
@@ -85,9 +87,15 @@ The exception carries the offending `LeakEvent` on `exc.event`, so you can inspe
 
 ### Important caveats for `block`
 
-- **The LLM call already happened.** `block` cannot prevent the *current* call from being billed — by the time the rule has enough signal to fire, the call's response is already on the way back. `block` halts the *next* call in a degenerate loop. That is the actual savings.
-- **Handler exceptions are still caught.** If your handler raises, that does not block the agent — the `LeakDetected` exception comes from `Sentinel`, not from your handler.
-- **Streaming calls block at the stream's close.** For Anthropic / Gemini / Bedrock streaming, the rule fires when the stream context manager exits. `LeakDetected` is raised from `__exit__` / `__aexit__`. You should design your stream consumer to handle this.
+- **The LLM call already happened.** `block` cannot prevent the *current* call from being billed — rules run after the provider returns. The savings come from stopping the *next* turns in a wasteful loop (and from your handler / exception recovery).
+- **Handler exceptions are still caught.** If your handler raises, that does not block the agent — `LeakDetected` comes from `Sentinel`, not from your handler.
+- **Streaming finalizes at stream close.** Anthropic / OpenAI / Gemini / Bedrock streaming build the `CallRecord` when the stream finishes. Prefer `with stream:` so raises propagate; GC cleanup of abandoned streams may suppress the exception after handlers ran.
+
+## Policy plane (paid cloud, mode-independent)
+
+When cloud policy is configured (`cloud_endpoint`/`policy_endpoint` + `api_key`), `record_call` may raise `BudgetExceeded`, `VelocityExceeded`, or `KillSwitchActive` **regardless of mode**. Those exceptions subclass `LeakDetected`.
+
+They still run **after** the wrapper’s provider call (same boundary as rules). Configure policy only if your paid cloud tier enables the Intervention Pack and you accept post-call halt semantics.
 
 ## Per-rule confidence floors
 
@@ -119,7 +127,7 @@ Each rule's config keys are documented in [Leak rules](./04-waste-rules.md).
 
 ## Selecting a subset of rules
 
-By default Sentinel runs all eight rules. To run only a specific subset, pass `rules=`:
+By default Sentinel runs all fifteen rules. To run only a specific subset, pass `rules=`:
 
 ```python
 sentinel = Sentinel(
@@ -129,7 +137,16 @@ sentinel = Sentinel(
 )
 ```
 
-The string in the list is the rule's `name` attribute. Valid names: `tool_loop`, `context_bloat`, `embedding_waste`, `zombie`, `model_misroute`, `retry_storm`, `tool_definition_bloat`, `retrieval_thrash`. Default is `"all"`.
+The string in the list is the rule's `name` attribute. Valid names:
+
+```
+tool_loop, context_bloat, embedding_waste, zombie, model_misroute,
+retry_storm, tool_definition_bloat, retrieval_thrash,
+vision_re_upload, vision_high_detail_misroute, vision_cost_concentration,
+audio_multichannel_doubling, voice_switching_loop, rerank_thrash, repair_loop
+```
+
+Default is `"all"`.
 
 Disabling rules is the right tool for "I don't care about this leak class" (e.g., a stateless inference API that can't have `context_bloat`). For "I want this rule but tuned looser", use `config` instead.
 
@@ -206,9 +223,9 @@ A rule that emits at confidence 0.6 will:
 
 | `min_confidence` | mode | Outcome |
 |---|---|---|
-| 0.5 | log | handler called; no exception |
-| 0.5 | alert | handler called; cloud sink notified |
-| 0.5 | block | handler called; `LeakDetected` raised |
+| 0.5 | log | handler called; no exception; cloud only if configured |
+| 0.5 | alert | same as log locally; cloud only if configured |
+| 0.5 | block | handler called; `LeakDetected` raised; cloud only if configured |
 | 0.7 | any | event dropped silently before reaching the handler |
 
 Use `min_confidence` to silence rules. Use `mode="block"` to halt agents on rules you trust.

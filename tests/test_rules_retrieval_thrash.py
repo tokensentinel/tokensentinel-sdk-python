@@ -323,7 +323,7 @@ def test_custom_retrieval_patterns(make_call, now):
 
 
 # ---------------------------------------------------------------------------
-# False-positive hazards (per docs/04_leak_taxonomy.md §8)
+# False-positive hazards (per docs/waste-taxonomy.md §8)
 # ---------------------------------------------------------------------------
 
 

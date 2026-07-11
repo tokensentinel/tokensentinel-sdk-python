@@ -134,7 +134,7 @@ client.messages
                      call original_create(...)
                      build CallRecord from response
                      hand record to sentinel  ──────▶  tracer.record(call)
-                                                       run all 8 rules
+                                                       run all 15 rules
                                                        for any rule that fired
                                                        above min_confidence:
                                                          dispatch LeakEvent
@@ -144,7 +144,7 @@ client.messages
 your code   ◀──────  Message object (unchanged)
 ```
 
-Total overhead: under 10ms p95 per call for the V0 rule set. The rules are pure functions of the per-session ring buffer — no I/O, no network calls.
+Total overhead target: well under 50ms p95 across all rules (typically much lower). The rules are pure functions of the per-session ring buffer — no I/O, no network calls for detection itself.
 
 ## What to do next
 
@@ -156,4 +156,4 @@ You have a working integration. Now:
 - **Reference the full surface.** [API reference](./07-api-reference.md) documents every kwarg.
 - **Find help when something goes wrong.** [Troubleshooting](./08-troubleshooting.md).
 
-If you want to see all eight rules fire on synthetic data without making real API calls, run `examples/tool_loop_demo.py` from the repo. It uses `Sentinel.record_call` directly to inject hand-crafted `CallRecord` objects.
+If you want to see rules fire on synthetic data without making real API calls, run `examples/tool_loop_demo.py` from the repo. It uses `Sentinel.record_call` directly to inject hand-crafted `CallRecord` objects. The full catalog of fifteen rules is documented in [Leak rules](./04-waste-rules.md).

@@ -1,6 +1,8 @@
 # Leak taxonomy
 
-The eight waste classes detected by V0. Each entry: definition, signal, default thresholds, false-positive hazards, example, and remediation.
+The **fifteen** waste classes detected by the current SDK. Each entry: definition, signal, default thresholds, false-positive hazards, example, and remediation.
+
+Rules 1–8 are the original chat/agent set. Rules 9–15 cover vision, audio, voice, rerank, and conversational repair.
 
 ## 1. Tool-loop
 
@@ -83,9 +85,11 @@ search("\"Web of Life\" game")  ─┘
 - `min_recent_calls`: 5
 
 **False-positive hazards.**
-- Long-running legitimate background agents (overnight research). Mitigation: opt-out per session via `sentinel.mark_long_running(session_id)`.
+- Long-running legitimate background agents (overnight research). Mitigation planned: opt-out per session via `sentinel.mark_long_running(session_id)` (not implemented yet — raise `threshold_minutes` or disable the rule).
 
-**Example.** Coding agent makes 38 tool calls over 12 minutes without ever returning a user-visible message. Fires at minute 5.
+**Coverage gap.** If the session has **never** produced a `user_facing_output=True` call, the rule currently returns `None` (it needs a prior user-facing turn as an anchor). Tool-only stuck agents that never emit text are not detected today.
+
+**Example.** Coding agent produced a user-facing message, then makes 38 tool calls over 12 minutes with no further user-visible message. Fires once the silence window exceeds the threshold.
 
 **Suggested action.** `kill_session_or_request_user_input`. The agent is stuck — kill it cleanly or surface a checkpoint to the user.
 
@@ -179,26 +183,112 @@ vector_search("pod stuck pending kubernetes debug")  ─┘
 
 **Suggested action.** `cache_retrieval_results_or_widen_initial_query_or_dedupe`. Concretely: add an LRU cache keyed on the embedded query vector; or have the agent issue one widened initial query and re-rank locally; or dedupe by chunk-hash before sending to the LLM.
 
-## V1-only anti-patterns (deferred)
+**Overlap.** The same retrieval tool calls can also fire `tool_loop` (double signal). Prefer scoping or disabling one rule if that is noisy.
 
-These need LLM-as-judge to detect reliably and are NOT in V0:
+## 9. Vision re-upload
+
+**Definition.** The same image bytes (or near-identical perceptual content) are re-sent on consecutive vision turns instead of caching results or reusing attachment IDs.
+
+**Signal.** ≥`min_calls` consecutive calls in `window_seconds` share an image hash. Primary: SHA-256 of in-band base64. Optional: pHash Hamming distance ≤ 6 when `[vision-perceptual]` is installed.
+
+**Default thresholds.** `min_calls=3`, `window_seconds=60`, `max_image_bytes=5MB`.
+
+**False-positive hazards.** Intentional re-sends; remote URL images (not hashed); blank/similar solid-color images under pHash.
+
+**Suggested action.** `cache_image_locally_or_reuse_attachment_id`.
+
+## 10. Vision high-detail misroute
+
+**Definition.** OpenAI high-detail vision tiles used for a classification-shaped question that only needs low-detail global features.
+
+**Signal.** OpenAI only; `detail` in `{high, auto, missing}`; short completion; classification keyword at word boundary.
+
+**Default thresholds.** `max_completion_tokens=50`. Confidence 0.75.
+
+**False-positive hazards.** OCR / dense-document tasks that need tiles; `detail="auto"` sometimes resolving to low.
+
+**Suggested action.** `use_image_detail_low_for_classification`.
+
+## 11. Vision cost concentration
+
+**Definition.** Gemini image tokens dominate the prompt while the answer is tiny — unused vision spend.
+
+**Signal.** Gemini only; `prompt_tokens_details` image share ≥ 80%; completion tokens &lt; 50.
+
+**Default thresholds.** `image_share_threshold=0.80`, `max_completion_tokens=50`. Confidence 0.65.
+
+**False-positive hazards.** Legitimate short answers that still required image inspection.
+
+**Suggested action.** `reduce_image_count_or_resolution`.
+
+## 12. Audio multichannel doubling
+
+**Definition.** Deepgram bills per-second × channels when `multichannel=True`; stereo (or more) often doubles spend without per-channel value.
+
+**Signal.** Deepgram transcribe methods; `channels ≥ 2` and `multichannel is True` in `usage_extra.model_specific_meta`.
+
+**Confidence.** 0.75 (stereo) / 0.85 (≥4 channels).
+
+**False-positive hazards.** True multi-mic separate-speaker tracks.
+
+**Suggested action.** `disable_multichannel_or_downmix_to_mono` (or mono + `diarize=True`).
+
+## 13. Voice switching loop
+
+**Definition.** Same TTS text synthesized against many ElevenLabs voices in a short window.
+
+**Signal.** Same `text_hash`, ≥3 distinct `voice_id` within 10s on `text_to_speech.*` methods.
+
+**Default thresholds.** `window_seconds=10`, `min_voices=3`. Confidence 0.7–0.9.
+
+**False-positive hazards.** Intentional multi-character narration or voice A/B UIs.
+
+**Suggested action.** `lock_voice_id_or_cache_synthesis`.
+
+## 14. Rerank thrash
+
+**Definition.** Identical Cohere rerank requests repeated; scoring is deterministic so extras are pure waste.
+
+**Signal.** Same `request_hash` on `provider=cohere` `method=rerank` ≥2 times in 30s.
+
+**Default thresholds.** `min_calls=2`, `window_seconds=30`. Confidence 0.75–0.9.
+
+**False-positive hazards.** Essentially none for exact hash repeats.
+
+**Suggested action.** `cache_rerank_results_by_query_hash`.
+
+## 15. Repair loop
+
+**Definition.** User issues short correction-shaped turns while the agent keeps regenerating similar answers — rewrite burn without convergence.
+
+**Signal.** ≥2 correction keywords in recent turns; user turns short vs prior agent; mean TF-IDF char-3-gram similarity of regenerations ≥ 0.7.
+
+**Default thresholds.** `window_turns=10`, `min_corrections=2`, `similarity_threshold=0.7`, `length_ratio=0.8`. Confidence 0.65–0.9.
+
+**False-positive hazards.** Legitimate creative refinement; non-English corrections; providers that redact `messages` from `raw_request` (rule cannot see history).
+
+**Suggested action.** `surface_correction_pattern_to_engineer`.
+
+## Deferred anti-patterns (not in-process today)
+
+These need LLM-as-judge or richer session context and are NOT SDK rules today:
 
 - **Semantic loop**: agent says effectively the same thing in different words across turns.
 - **Hallucinated tool retry**: agent calls a tool that returned an error, hallucinates the response, continues without re-trying.
 - **Verbose chain-of-thought leak**: agent reasons in expensive tokens when concise output would do.
 - **Premature compaction**: customer's compaction step kicks in too aggressively, costing more in re-summarization than the saved tokens.
 
-LLM-as-judge takes the gray-zone V0 firings and the above anti-patterns as inputs.
+Optional cloud-side LLM-as-judge can take gray-zone SDK firings and the above anti-patterns as inputs.
 
 ## Severity levels
 
-Every leak event carries a `confidence` score 0.0–1.0. Default routing:
+Every leak event carries a `confidence` score 0.0–1.0. In the **open-source SDK**, routing is simple:
 
-| Confidence | Default action |
+| Confidence | SDK behavior |
 |---|---|
-| < 0.5 | discarded (not emitted) |
-| 0.5–0.75 | logged only, even in `alert` mode |
-| 0.75–0.9 | emitted in `alert` mode |
-| ≥ 0.9 | emitted in all modes; eligible for `block` |
+| &lt; `min_confidence` (default 0.5) | Dropped before handlers |
+| ≥ `min_confidence` | Handlers run; cloud sink if configured; `mode="block"` may raise |
 
-Customers tune this in `Sentinel(config={...})`. The defaults err toward **fewer false positives at the cost of some false negatives** — the cardinal rule of detection products.
+There is **no** separate in-process “alert band” vs “log band” beyond `min_confidence` and `mode`. Paid cloud may apply additional judge / webhook policies on ingested events.
+
+Defaults err toward **fewer false positives at the cost of some false negatives** — the cardinal rule of detection products.

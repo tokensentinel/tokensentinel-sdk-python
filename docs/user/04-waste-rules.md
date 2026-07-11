@@ -1,8 +1,10 @@
 # Leak rules
 
-TokenSentinel V0 ships eight deterministic waste detection rules. Each is a pure function of the in-process per-session ring buffer plus your config — no I/O, no network calls, sub-millisecond p95 per rule.
+TokenSentinel ships **fifteen** deterministic waste detection rules. Each is a pure function of the in-process per-session ring buffer plus your config — no I/O, no network calls, sub-millisecond p95 per rule.
 
-This page is the user-facing reference: what each rule detects, when it fires, default thresholds, how to tune, and a sample event payload. For the design rationale and false-positive analysis, see [`docs/04_leak_taxonomy.md`](../04_leak_taxonomy.md) at the repo root.
+This page is the user-facing reference: what each rule detects, when it fires, default thresholds, how to tune, and a sample event payload. For the design rationale and false-positive analysis, see [`docs/waste-taxonomy.md`](../waste-taxonomy.md).
+
+**Timing.** Rules run **after** each wrapped provider call returns. The call that just completed is already billed; detection is meant to stop wasteful *subsequent* turns (especially with `mode="block"` or a handler that aborts the agent loop).
 
 ## Quick index
 
@@ -16,6 +18,13 @@ This page is the user-facing reference: what each rule detects, when it fires, d
 | [`retry_storm`](#6-retry_storm) | 0.9 | Same call retried ≥5 times in 30s, no parameter change. |
 | [`tool_definition_bloat`](#7-tool_definition_bloat) | 0.85 / 0.95 | A single request ships ≥30 tool defs or ≥30KB of tool JSON. |
 | [`retrieval_thrash`](#8-retrieval_thrash) | 0.55–0.95 | Retrieval tool called repeatedly with overlapping queries. |
+| [`vision_re_upload`](#9-vision_re_upload) | 0.65–0.99 | Same image re-uploaded across consecutive vision calls. |
+| [`vision_high_detail_misroute`](#10-vision_high_detail_misroute) | 0.75 | OpenAI `detail=high` on a classification-shaped vision prompt. |
+| [`vision_cost_concentration`](#11-vision_cost_concentration) | 0.65 | Gemini: image tokens dominate prompt while completion is tiny. |
+| [`audio_multichannel_doubling`](#12-audio_multichannel_doubling) | 0.75 / 0.85 | Deepgram multichannel billing on stereo (or more) audio. |
+| [`voice_switching_loop`](#13-voice_switching_loop) | 0.7–0.9 | Same text synthesized against many ElevenLabs voice IDs. |
+| [`rerank_thrash`](#14-rerank_thrash) | 0.75–0.9 | Identical Cohere rerank requests repeated in a window. |
+| [`repair_loop`](#15-repair_loop) | 0.65–0.9 | User corrections + near-identical agent regenerations. |
 
 All rules emit a [`LeakEvent`](./07-api-reference.md#leakevent) with the same shape. The `evidence` dict is rule-specific.
 
@@ -85,10 +94,14 @@ LeakEvent(
         "call_count": 3,
         "window_seconds": 60,
         "mean_similarity": 0.91,
+        # Default: redacted shape only (no raw argument values).
+        # Set tool_loop.include_raw_args=True only for local debugging.
         "sample_args": [
-            {"query": "web of life game"},
-            {"query": "Web of Life game"},
-            {"query": '"Web of Life" game'},
+            {
+                "keys": ["query"],
+                "value_lengths": {"query": 18},
+                "hash": "9d4e6c2f8a1b3e7d",
+            },
         ],
     },
     estimated_burn=0.0324,
@@ -96,6 +109,8 @@ LeakEvent(
     raised_at=datetime(2026, 5, 7, 14, 22, 31, tzinfo=timezone.utc),
 )
 ```
+
+**Privacy.** By default `sample_args` is redacted (keys + value lengths + short hash). Raw args require explicit `tool_loop.include_raw_args=True` (same knobs exist under `retrieval_thrash.*`).
 
 **When to disable.** Polling-heavy agents (every 10 seconds, same tool, same args). Multi-armed exploration agents that intentionally vary the same query. Paged-call agents (page 1, page 2, page 3 with otherwise-identical args).
 
@@ -158,7 +173,7 @@ LeakEvent(
 
 **What it detects.** The same embedding input is embedded multiple times within a session.
 
-**When it fires.** Two or more calls with `method == "embeddings.create"` in the same session whose hashed `raw_request["input"]` is identical. Match is exact SHA-256, not semantic — so this rule has effectively zero false positives.
+**When it fires.** Two or more embedding calls in the same session whose hashed `raw_request["input"]` is identical. Methods recognized: names ending in `embeddings.create` (OpenAI) **or** exactly `embed` (Voyage / Cohere). Match is exact SHA-256, not semantic — so this rule has effectively zero false positives.
 
 **Default thresholds.**
 
@@ -232,7 +247,9 @@ Sentinel(
 )
 ```
 
-For long-running legitimate background agents (overnight research), raise `threshold_minutes` substantially or disable the rule for those projects.
+For long-running legitimate background agents (overnight research), raise `threshold_minutes` substantially or disable the rule for those projects. Note: `Sentinel.mark_long_running(session_id)` is documented in older taxonomy notes but is **not implemented** yet.
+
+**Coverage gap.** If the session never sets `user_facing_output=True` on any call, this rule does not fire (it needs a prior user-facing anchor). Tool-only stuck agents fall into that gap.
 
 **Sample event.**
 
@@ -265,8 +282,8 @@ LeakEvent(
 
 - Prompt token count below `max_prompt_tokens` (default 500).
 - Completion token count below `max_completion_tokens` (default 50).
-- The flattened messages text contains a classification keyword: `classify`, `yes or no`, `true or false`, `rate from 1`, `rate this on a scale`, `is this`, `categorize`, `label this`, `which category`.
-- Model is a frontier model (Claude Opus, Claude Sonnet, GPT-5, GPT-4-turbo, GPT-4o, Gemini 2.5/2.0 Pro, DeepSeek-Chat/Reasoner, Command-R+/A, Mistral Large) — and is *not* an explicit cheap variant (`gpt-5-mini`, `gpt-5-nano`, `gpt-4o-mini`).
+- The flattened messages text matches a classification keyword at **word boundaries**: `classify`, `categorize` / `categorise`, `label this`, `which category`, `yes or no`, `true or false`, `is this a`, `is this an`, `rate from 1`, `rate this on a scale`.
+- Model is a frontier model (Claude Opus/Sonnet, GPT-5 / GPT-4-turbo / GPT-4o, Gemini 2.5/2.0 Pro, DeepSeek-Chat/Reasoner, Command-R+/A, Mistral Large) — and is *not* an explicit cheap variant (`gpt-5-mini`, `gpt-5-nano`, `gpt-4o-mini`).
 
 The emitted event includes a `recommended_alternative` field that names the cheaper model the rule would route this call to.
 
@@ -487,9 +504,11 @@ LeakEvent(
         "window_seconds": 120,
         "mean_similarity": 0.71,
         "sample_args": [
-            {"query": "kubernetes pod stuck pending"},
-            {"query": "k8s pod pending state troubleshoot"},
-            {"query": "kubernetes scheduler pod pending"},
+            {
+                "keys": ["query"],
+                "value_lengths": {"query": 32},
+                "hash": "a1b2c3d4e5f60718",
+            },
         ],
         "matched_pattern": "vector_search",
     },
@@ -499,7 +518,166 @@ LeakEvent(
 )
 ```
 
+Raw query text is redacted by default (`retrieval_thrash.include_raw_args=False`).
+
 **When to disable.** Workloads where overlap between retrieval queries is intended (multi-tenant retrieval where the same tool resolves different tenants per call). Use a custom `retrieval_tool_patterns` to scope, or disable for that project.
+
+**Overlap with `tool_loop`.** The same retrieval calls can fire both `retrieval_thrash` and `tool_loop` in one evaluation. If that double-signal is noisy, disable one of the two for the project or raise `tool_loop.cosine_threshold`.
+
+---
+
+## 9. `vision_re_upload`
+
+**What it detects.** The same image is uploaded across multiple consecutive vision calls instead of caching OCR/description results or reusing a provider attachment id.
+
+**When it fires.** Within `window_seconds`, the latest call’s image set contains a hash that also appears in each of the previous `min_calls - 1` consecutive calls (anchored on the latest call). Primary match is exact-byte SHA-256 of in-band base64 payloads. With the optional `[vision-perceptual]` extra (`imagehash` + Pillow), a perceptual-hash fallback fires when bytes differ but images are visually near-identical (Hamming distance ≤ 6).
+
+Remote `http(s)` image URLs and Gemini file URIs are **not** hashed (out of band).
+
+**Default thresholds.**
+
+| Config key | Default | Description |
+|---|---|---|
+| `vision_re_upload.window_seconds` | `60` | Look-back window. |
+| `vision_re_upload.min_calls` | `3` | Consecutive calls carrying the same image. |
+| `vision_re_upload.max_image_bytes` | `5242880` (5 MB) | Per-image cap before hashing (DoS guard). |
+
+**Suggested action.** `cache_image_locally_or_reuse_attachment_id`.
+
+**When to disable.** Workflows that intentionally re-send the same screenshot every turn for a reason you accept paying for.
+
+---
+
+## 10. `vision_high_detail_misroute`
+
+**What it detects.** OpenAI vision calls that request high-detail tiles for a classification-shaped prompt that only needs the cheap global view.
+
+**When it fires.** All of:
+
+- `provider == "openai"`.
+- At least one `image_url` block has `detail` in `{"high", "auto"}` or omits `detail` (SDK default is effectively auto → usually high).
+- Completion tokens ≤ `max_completion_tokens` (default 50).
+- Prompt text matches a classification keyword (same word-boundary list as `model_misroute`).
+
+**Default thresholds.**
+
+| Config key | Default | Description |
+|---|---|---|
+| `vision_high_detail_misroute.max_completion_tokens` | `50` | Upper bound for “short answer” classification. |
+
+**Suggested action.** `use_image_detail_low_for_classification`.
+
+**When to disable.** Vision tasks that genuinely need tile-level detail (OCR of dense documents, fine UI inspection).
+
+---
+
+## 11. `vision_cost_concentration`
+
+**What it detects.** A Gemini call where image tokens dominate the prompt while the model returns a tiny text answer — image processing that likely did not inform the output.
+
+**When it fires.** All of:
+
+- `provider == "gemini"`.
+- `raw_response_meta["prompt_tokens_details"]` is present (wrapper-populated modality breakdown).
+- Image modality tokens / total prompt tokens ≥ `image_share_threshold` (default 0.80).
+- Completion tokens &lt; `max_completion_tokens` (default 50).
+
+Anthropic and OpenAI do not expose a reliable per-modality split, so this rule is Gemini-only by design.
+
+**Default thresholds.**
+
+| Config key | Default | Description |
+|---|---|---|
+| `vision_cost_concentration.image_share_threshold` | `0.80` | Minimum image share of prompt tokens. |
+| `vision_cost_concentration.max_completion_tokens` | `50` | “Tiny output” ceiling. |
+
+**Suggested action.** `reduce_image_count_or_resolution`.
+
+**When to disable.** Short answers that still depend on images (e.g. “any errors in this screenshot?” → “OK”).
+
+---
+
+## 12. `audio_multichannel_doubling`
+
+**What it detects.** Deepgram transcription billed with the multichannel multiplier on stereo (or higher) audio when mono + diarization would usually suffice.
+
+**When it fires.** Latest call has:
+
+- `provider == "deepgram"` and method in `transcribe_file` / `transcribe_url` / `transcribe_live`.
+- `usage_extra.model_specific_meta.channels >= 2`.
+- `usage_extra.model_specific_meta.multichannel is True`.
+
+Confidence is 0.75 for stereo and 0.85 for ≥4 channels.
+
+**Suggested action.** `disable_multichannel_or_downmix_to_mono`.
+
+**When to disable.** True multi-mic capture where each channel is a distinct speaker track you consume separately.
+
+---
+
+## 13. `voice_switching_loop`
+
+**What it detects.** The same TTS text synthesized against many distinct ElevenLabs `voice_id` values in a short window — voice A/B experimentation leaking into production.
+
+**When it fires.** Within `window_seconds` (default 10), the same `text_hash` appears across ≥ `min_voices` (default 3) distinct voice IDs on methods prefixed `text_to_speech.`.
+
+**Default thresholds.**
+
+| Config key | Default | Description |
+|---|---|---|
+| `voice_switching_loop.window_seconds` | `10` | Look-back window. |
+| `voice_switching_loop.min_voices` | `3` | Distinct voices required. |
+
+**Suggested action.** `lock_voice_id_or_cache_synthesis`.
+
+**When to disable.** Intentional multi-character narration or end-user side-by-side voice comparison UIs.
+
+---
+
+## 14. `rerank_thrash`
+
+**What it detects.** The same Cohere rerank `(model, query, documents)` triple requested repeatedly — every call after the first is pure waste (deterministic scoring).
+
+**When it fires.** Within `window_seconds` (default 30), ≥ `min_calls` (default 2) Cohere `method == "rerank"` calls share the same `request_hash`.
+
+**Default thresholds.**
+
+| Config key | Default | Description |
+|---|---|---|
+| `rerank_thrash.window_seconds` | `30` | Look-back window. |
+| `rerank_thrash.min_calls` | `2` | Fires on the first duplicate by design. |
+
+**Suggested action.** `cache_rerank_results_by_query_hash`.
+
+**When to disable.** Rare — identical reranks have no legitimate incremental value.
+
+---
+
+## 15. `repair_loop`
+
+**What it detects.** Conversational repair waste: the user issues short correction-shaped turns while the agent regenerates near-identical answers (economic shape of ungrounded rewrites, without claiming to detect “hallucination” itself).
+
+**When it fires.** On the latest call’s `raw_request["messages"]` history (last `window_turns` turns):
+
+- ≥ `min_corrections` (default 2) user turns match correction keywords at word boundaries (`no`, `wrong`, `i meant`, …) **and** are shorter than `length_ratio` × the prior assistant turn.
+- Surrounding assistant regenerations have mean TF-IDF char-3-gram cosine ≥ `similarity_threshold` (default 0.7).
+
+Evidence is structural only (counts, lengths, keywords) — raw chat text is not shipped.
+
+**Requires full messages in `raw_request`.** Providers that redact message bodies (e.g. Cohere chat) will not fire this rule.
+
+**Default thresholds.**
+
+| Config key | Default | Description |
+|---|---|---|
+| `repair_loop.window_turns` | `10` | Recent turns considered. |
+| `repair_loop.min_corrections` | `2` | Correction-shaped user turns required. |
+| `repair_loop.similarity_threshold` | `0.7` | Mean similarity of agent regenerations. |
+| `repair_loop.length_ratio` | `0.8` | User turn must be shorter than this × prior agent turn. |
+
+**Suggested action.** `surface_correction_pattern_to_engineer`.
+
+**When to disable.** Creative iterative refinement where high similarity is expected, or non-English correction phrases the keyword list misses.
 
 ---
 
@@ -525,18 +703,32 @@ For per-rule pricing of the wrong-action cost:
 | `retry_storm` | near-zero — exact-hash match | high — 100+ retries in seconds |
 | `tool_definition_bloat` | low — tool list audit suggested | high — 70%+ context burned |
 | `retrieval_thrash` | medium — caching suggested | medium — redundant retrieval |
+| `vision_re_upload` | low — cache suggested | high — repeated image token burn |
+| `vision_high_detail_misroute` | low — force `detail=low` | medium — 4× vision overpay |
+| `vision_cost_concentration` | medium — may flag short valid answers | medium — unused image tokens |
+| `audio_multichannel_doubling` | medium — legit multi-mic | high — silent 2–4× audio bill |
+| `voice_switching_loop` | medium — intentional A/B | high — repeated TTS of same text |
+| `rerank_thrash` | near-zero — exact hash | medium — repeated search units |
+| `repair_loop` | medium — creative iteration | medium — ungrounded rewrite burn |
 
 This asymmetry is why the defaults err toward fewer false positives at the cost of some false negatives. Detection products that cry wolf get muted.
 
-## What's next (V1 roadmap)
+## Known limitations (current SDK)
 
-V1 will add an **LLM-as-judge** pass: a cheap model (Haiku) reads the gray-zone V0 firings (confidence 0.5–0.75) and ratifies or vetoes them. Haiku polices Opus. This dramatically reduces false positives on heuristic rules (`tool_loop`, `model_misroute`, `context_bloat`) without raising thresholds.
+- **Post-call only.** Rules and `mode="block"` cannot un-bill the call that just finished.
+- **Zombie requires a prior user-facing turn.** Sessions that *never* set `user_facing_output=True` do not fire `zombie` today (tool-only stuck agents need a different signal or a future rule change).
+- **Documented but not yet implemented mitigations:** `polling_tools` allow-lists, monotonic page suppression for `tool_loop`, and `Sentinel.mark_long_running(session_id)` for zombie opt-out. Until those land, disable or re-threshold the rule for those projects.
+- **Optional extras:** perceptual vision (`[vision-perceptual]`), audio metadata for Whisper duration (`[audio-metadata]`). Without them, related paths degrade gracefully.
 
-V1 will also add:
+## Cloud-side roadmap
 
-- Semantic similarity for `tool_loop` (sentence-transformers, optional via `[embeddings]` extra).
+Optional TokenSentinel Cloud can run LLM-as-judge ratification on gray-zone confidences and composite signals (`lost_agent`, `runaway_retrieval`, `zombie_loop`). Those are **not** in-process SDK rules.
+
+Also planned / partial on the roadmap:
+
+- Semantic similarity for `tool_loop` (sentence-transformers via `[embeddings]` extra — extra exists; rule path not fully wired as of 1.0.0).
 - Per-rule mode (e.g., `block` only on `embedding_waste`).
-- Polling-tool allow-lists for `tool_loop`.
+- Polling-tool allow-lists and pagination suppressors for `tool_loop`.
 - Context-token-entropy refinement for `context_bloat`.
 
-Until V1 lands, tune thresholds and use rule disable lists to manage noise.
+Until those land, tune thresholds and use rule disable lists to manage noise.

@@ -1,10 +1,11 @@
 # Integrations
 
-TokenSentinel instruments LLM clients **at the API call layer**. Whatever framework, host, or orchestrator sits above the LLM client is largely irrelevant: as long as the underlying call goes through `anthropic.Anthropic`, `openai.OpenAI`, `google.genai.Client`, or a boto3 Bedrock client, Sentinel sees every call and runs every rule.
+TokenSentinel instruments LLM traffic in two ways:
 
-That single integration point is what lets a five-line install cover MCP hosts, RAG pipelines, and every major orchestration framework. This page shows the wrap site for each.
+1. **Client wrap** — `sentinel.wrap(provider_client)` on Anthropic, OpenAI (+ compatible), Gemini, Bedrock, Voyage, Cohere V2, Replicate, Deepgram, or ElevenLabs.
+2. **Framework enrichers** — LangChain callback handler and OpenTelemetry span processor (optional extras) when you cannot reach the raw client.
 
-> **The rule is always the same.** Find the constructor for the client your framework uses to make the actual HTTP call, and pass that instance to `sentinel.wrap(...)` *before* handing it to the framework. Do this once, at startup, before any agent runs.
+> **Default rule.** Find the constructor for the client your framework uses to make the actual HTTP call, and pass that instance to `sentinel.wrap(...)` *before* handing it to the framework.
 
 ## MCP servers
 
@@ -122,6 +123,8 @@ Each framework owns its own agent abstraction, but all of them ultimately call i
 
 ### LangChain
 
+**Option A — wrap the underlying client** (preferred when the framework accepts a client instance):
+
 ```python
 from token_sentinel import Sentinel
 from langchain_anthropic import ChatAnthropic
@@ -131,7 +134,26 @@ sentinel = Sentinel(project="langchain-agent")
 chat = ChatAnthropic(client=sentinel.wrap(anthropic.Anthropic()), model="claude-sonnet-4-6")
 ```
 
-For OpenAI, swap `langchain_anthropic.ChatAnthropic` for `langchain_openai.ChatOpenAI` and pass a wrapped `openai.OpenAI()`.
+For OpenAI, use `langchain_openai.ChatOpenAI` with a wrapped `openai.OpenAI()`.
+
+**Option B — callback enricher** (no client rewrite):
+
+```bash
+pip install token-sentinel[langchain]
+```
+
+```python
+from token_sentinel import Sentinel
+from token_sentinel.enrichers import TokenSentinelCallbackHandler
+
+sentinel = Sentinel(project="langchain-agent", mode="log")
+handler = TokenSentinelCallbackHandler(sentinel)
+
+# Attach to invoke / agent config:
+result = chain.invoke({"input": "..."}, config={"callbacks": [handler]})
+```
+
+The handler emits one `CallRecord` per LLM (and tool) callback cycle into `sentinel.record_call`. Optional `session_id=` on the handler, or `handler.new_session()` between jobs.
 
 ### LangGraph
 
@@ -151,7 +173,32 @@ graph = StateGraph(...)
 # graph.add_node("planner", lambda state: chat.invoke(state["messages"]))
 ```
 
-### CrewAI
+### CrewAI / AutoGen / Pydantic AI — OpenTelemetry enricher
+
+These frameworks commonly emit OpenTelemetry `gen_ai.*` spans. One span processor covers them (and any stack that follows the same semantic conventions):
+
+```bash
+pip install token-sentinel[otel]
+```
+
+```python
+from token_sentinel import Sentinel
+from token_sentinel.enrichers import TokenSentinelSpanProcessor
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+
+sentinel = Sentinel(project="otel-agent", mode="log")
+
+provider = TracerProvider()
+provider.add_span_processor(TokenSentinelSpanProcessor(sentinel))
+trace.set_tracer_provider(provider)
+
+# Framework agents that export gen_ai spans now feed CallRecords automatically.
+```
+
+You can still wrap an underlying OpenAI/Anthropic client when the framework accepts one — prefer that when you need `mode="block"` at the HTTP call site. OTel enrichers observe spans **after** the call completes (same post-call boundary as wrap).
+
+### CrewAI (client wrap, when supported)
 
 ```python
 from token_sentinel import Sentinel
@@ -159,12 +206,12 @@ from crewai import LLM, Agent
 import openai
 
 sentinel = Sentinel(project="crewai-agent")
-llm = LLM(model="gpt-5", client=sentinel.wrap(openai.OpenAI()))
+llm = LLM(model="gpt-4o", client=sentinel.wrap(openai.OpenAI()))
 
 researcher = Agent(role="researcher", goal="...", llm=llm)
 ```
 
-### AutoGen
+### AutoGen (client wrap)
 
 ```python
 from token_sentinel import Sentinel
@@ -173,12 +220,15 @@ from autogen_agentchat.agents import AssistantAgent
 import openai
 
 sentinel = Sentinel(project="autogen-agent")
-model_client = OpenAIChatCompletionClient(model="gpt-5", client=sentinel.wrap(openai.OpenAI()))
+model_client = OpenAIChatCompletionClient(
+    model="gpt-4o",
+    client=sentinel.wrap(openai.OpenAI()),
+)
 
 agent = AssistantAgent("assistant", model_client=model_client)
 ```
 
-### Pydantic AI
+### Pydantic AI (client wrap)
 
 ```python
 from token_sentinel import Sentinel
@@ -187,7 +237,7 @@ from pydantic_ai.models.openai import OpenAIModel
 import openai
 
 sentinel = Sentinel(project="pydantic-ai-agent")
-model = OpenAIModel("gpt-5", openai_client=sentinel.wrap(openai.OpenAI()))
+model = OpenAIModel("gpt-4o", openai_client=sentinel.wrap(openai.OpenAI()))
 
 agent = Agent(model=model)
 ```
