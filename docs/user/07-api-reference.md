@@ -66,6 +66,8 @@ class Sentinel:
         *,
         tags: dict[str, str] | None = None,
     ) -> Session: ...
+    def mark_long_running(self, session_id: str) -> None: ...
+    def unmark_long_running(self, session_id: str) -> None: ...
     def close(self, timeout: float = 5.0) -> bool: ...
 ```
 
@@ -141,6 +143,10 @@ sess = sentinel.session(tags={"team": "growth", "feature": "chat"})
 # Use sess.session_id as _sentinel_session_id on wrapped calls.
 # sess.record_call(call) stamps tags when CallRecord.tags is empty.
 ```
+
+#### `mark_long_running` / `unmark_long_running`
+
+Opt a `session_id` out of (or back into) the `zombie` rule — for overnight research jobs and other intentionally silent agents.
 
 #### `close(timeout=5.0) -> bool`
 
@@ -260,7 +266,7 @@ Subclasses of `LeakDetected`. Raised from `record_call` when a cloud **policy** 
 
 | Rule | Config keys (prefix with `rule_name.`) | Typical confidence |
 |---|---|---|
-| `tool_loop` | `window_seconds`, `min_calls`, `cosine_threshold`, `similarity_metric`, `charngram_size`, `include_raw_args`, `max_arg_bytes`, `max_total_corpus_bytes` | 0.6–0.99 |
+| `tool_loop` | `window_seconds`, `min_calls`, `cosine_threshold`, `similarity_metric`, `charngram_size`, `include_raw_args`, `max_arg_bytes`, `max_total_corpus_bytes`, `polling_tools` | 0.6–0.99 |
 | `context_bloat` | `lookback_turns`, `slope_threshold`, `min_turns` | 0.55–0.95 |
 | `embedding_waste` | (none) | 0.99 |
 | `zombie` | `threshold_minutes`, `min_recent_calls` | 0.75 |
@@ -310,4 +316,4 @@ See [Integrations](./06-integrations.md).
 
 **Not stable:** tracer/rule/wrapper internals; exact confidence formulas; `suggested_action` string wording; cloud wire extras.
 
-`__version__` is the installed package version string (e.g. `"1.0.0"`).
+`__version__` is the installed package version string (e.g. `"1.0.1"`).

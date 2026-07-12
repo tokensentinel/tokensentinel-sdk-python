@@ -164,8 +164,8 @@ def test_compat_chat_completion_records_call(label: str, base_url: str, model: s
     assert rec.model == model
     assert rec.prompt_tokens == 77
     assert rec.completion_tokens == 11
-    # base_url is purely an HTTP transport concern; not stored in the record.
-    assert "base_url" not in rec.raw_request
+    # base_url is stored so model_misroute can normalize gateway model names.
+    assert rec.raw_request.get("base_url") == base_url
 
 
 @pytest.mark.parametrize("label,base_url,model", OPENAI_COMPAT_PROVIDERS)

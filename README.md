@@ -146,11 +146,11 @@ python -m tokensentinel_migrate helicone --helicone-api-key sk-... --tokensentin
 
 ## Status
 
-**Stable Release** — 15 deterministic rules, 9 native providers (Anthropic, OpenAI, Gemini, Bedrock, Voyage, Cohere, Replicate, Deepgram, ElevenLabs), streaming + async, and full integration with the optional TokenSentinel Cloud policy engine.
+**Current release: 1.0.1** — 15 deterministic rules, 9 native providers (Anthropic, OpenAI, Gemini, Bedrock, Voyage, Cohere, Replicate, Deepgram, ElevenLabs), streaming + async, and optional TokenSentinel Cloud policy integration.
 
-**Tests**: 912 SDK tests passing. Codebase is clean of ruff, mypy, and typecheck warnings.
+See [CHANGELOG.md](CHANGELOG.md) for the full 1.0.1 release notes (zombie / tags / tool-loop FP fixes, docs accuracy pass).
 
-The public API surface (`Sentinel`, `wrap`, `on_leak` / `on_waste`, `record_call`, `session`, `LeakEvent` / `WasteEvent`, `CallRecord`, `LeakDetected` / `WasteDetected`, plus policy exceptions `BudgetExceeded`, `VelocityExceeded`, `KillSwitchActive`) is stable and follows semver — pin deliberately (e.g. `token-sentinel>=1.0,<2`).
+The public API surface (`Sentinel`, `wrap`, `on_leak` / `on_waste`, `record_call`, `session`, `mark_long_running`, `LeakEvent` / `WasteEvent`, `CallRecord`, `LeakDetected` / `WasteDetected`, plus policy exceptions `BudgetExceeded`, `VelocityExceeded`, `KillSwitchActive`) is stable and follows semver — pin deliberately (e.g. `token-sentinel>=1.0,<2`).
 
 ## Architecture
 

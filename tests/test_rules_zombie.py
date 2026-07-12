@@ -35,8 +35,38 @@ def test_below_min_recent_calls(make_call, now):
     assert ZombieRule({}).evaluate(session, project="p") is None
 
 
-def test_no_user_facing_output_ever(make_call, now):
-    """If there's never been a user-facing output, rule cannot fire."""
+def test_no_user_facing_output_ever_fires_when_window_elapsed(make_call, now):
+    """Pure tool-only stuck agent — fires once silence window is long enough."""
+    session = [
+        make_call(
+            timestamp=now - timedelta(minutes=10) + timedelta(minutes=i),
+            tool_calls=[{"name": "tool", "arguments": {}}],
+        )
+        for i in range(6)
+    ]
+    # Last call at now - 4 min; first at now - 10 min → elapsed from first = 6 min
+    # Need last call at `now` for anchor math: rebuild with last at now.
+    session = [
+        make_call(
+            timestamp=now - timedelta(minutes=6) + timedelta(minutes=i),
+            tool_calls=[{"name": "tool", "arguments": {"i": i}}],
+        )
+        for i in range(5)
+    ]
+    session.append(
+        make_call(
+            timestamp=now,
+            tool_calls=[{"name": "tool", "arguments": {"i": 5}}],
+        )
+    )
+    ev = ZombieRule({}).evaluate(session, project="p")
+    assert ev is not None
+    assert ev.type == "zombie"
+    assert ev.evidence.get("never_user_facing") is True
+
+
+def test_no_user_facing_output_short_window_no_fire(make_call, now):
+    """Tool-only session shorter than threshold — no fire."""
     session = [
         make_call(
             timestamp=now + timedelta(seconds=i),
@@ -242,19 +272,48 @@ def test_custom_min_recent_calls(make_call, now):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason="V1 mitigation: Sentinel.mark_long_running(session_id) opt-out",
-    strict=False,
-)
-def test_long_running_research_should_not_fire(make_call, now):
-    """Overnight research agent — V0 cannot distinguish from a stuck loop."""
+def test_long_running_research_opted_out_via_config(make_call, now):
+    """``mark_long_running`` injects session id into zombie config set."""
     base = now - timedelta(hours=8)
-    session = [make_call(timestamp=base, user_facing_output=True)]
+    session = [make_call(timestamp=base, user_facing_output=True, session_id="long-1")]
     for i in range(20):
         session.append(
             make_call(
+                session_id="long-1",
                 timestamp=now - timedelta(minutes=4) + timedelta(seconds=i * 10),
                 tool_calls=[{"name": "research_step", "arguments": {"i": i}}],
             )
         )
-    assert ZombieRule({}).evaluate(session, project="p") is None
+    rule = ZombieRule({"zombie.long_running_sessions": {"long-1"}})
+    assert rule.evaluate(session, project="p") is None
+
+
+def test_mark_long_running_via_sentinel(make_call, now):
+    from token_sentinel import Sentinel
+
+    s = Sentinel(project="p", rules=["zombie"])
+    s.mark_long_running("long-1")
+    base = now - timedelta(minutes=10)
+    for i, uf in enumerate([True] + [False] * 6):
+        s.record_call(
+            make_call(
+                session_id="long-1",
+                timestamp=base + timedelta(minutes=i),
+                user_facing_output=uf,
+                tool_calls=[] if uf else [{"name": "t", "arguments": {}}],
+            )
+        )
+    # Without opt-out this would fire; with mark_long_running it must not.
+    events = []
+    @s.on_leak
+    def h(e):
+        events.append(e)
+    # Force re-eval by recording another silent call past threshold
+    s.record_call(
+        make_call(
+            session_id="long-1",
+            timestamp=now,
+            tool_calls=[{"name": "t", "arguments": {}}],
+        )
+    )
+    assert not any(e.type == "zombie" for e in events)

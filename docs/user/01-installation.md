@@ -67,7 +67,7 @@ pip install token-sentinel[all]
 python -c "from token_sentinel import Sentinel, __version__; print(__version__, Sentinel.__module__)"
 ```
 
-Expected output starts with `1.0.0` (or your installed version) and `token_sentinel.sentinel`.
+Expected output starts with `1.0.1` (or your installed version) and `token_sentinel.sentinel`.
 
 To verify a provider extra and wrapper dispatch (no real network call required for wrap itself):
 

@@ -6,6 +6,7 @@ from collections import Counter
 
 from token_sentinel.events import CallRecord, LeakEvent
 from token_sentinel.rules.base import Rule
+from token_sentinel.rules.timeutil import elapsed_seconds
 
 
 class RetryStormRule(Rule):
@@ -18,7 +19,7 @@ class RetryStormRule(Rule):
         min_retries = self.get("min_retries", 5)
 
         now = session[-1].timestamp
-        recent = [c for c in session if (now - c.timestamp).total_seconds() <= window]
+        recent = [c for c in session if elapsed_seconds(now, c.timestamp) <= window]
         if not recent:
             return None
 

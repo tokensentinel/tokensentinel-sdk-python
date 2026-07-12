@@ -43,6 +43,7 @@ from typing import Any
 
 from token_sentinel.events import CallRecord, LeakEvent
 from token_sentinel.rules.base import Rule
+from token_sentinel.rules.timeutil import elapsed_seconds
 from token_sentinel.rules.tool_loop import (
     DEFAULT_MAX_ARG_BYTES,
     DEFAULT_MAX_TOTAL_CORPUS_BYTES,
@@ -84,7 +85,7 @@ class RetrievalThrashRule(Rule):
         include_raw_args = self.get("include_raw_args", False)
 
         now = session[-1].timestamp
-        recent = [c for c in session if (now - c.timestamp).total_seconds() <= window]
+        recent = [c for c in session if elapsed_seconds(now, c.timestamp) <= window]
 
         # Group only retrieval-shaped tool invocations by tool name.
         by_tool: dict[str, list[dict[str, Any]]] = {}

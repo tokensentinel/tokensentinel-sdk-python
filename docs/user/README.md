@@ -70,7 +70,7 @@ client = sentinel.wrap(anthropic.Anthropic())
 
 ## Stability
 
-Package version **1.0.0+**. Public API: `Sentinel`, `wrap`, `on_leak` / `on_waste`, `record_call`, `session`, `close`, `CallRecord`, `LeakEvent` / `WasteEvent`, `LeakDetected` / `WasteDetected`, policy exceptions. Semver applies. Internal modules may change between minors.
+Package version **1.0.1+**. Public API: `Sentinel`, `wrap`, `on_leak` / `on_waste`, `record_call`, `session`, `mark_long_running`, `close`, `CallRecord`, `LeakEvent` / `WasteEvent`, `LeakDetected` / `WasteDetected`, policy exceptions. Semver applies. Internal modules may change between minors.
 
 ## Getting help
 

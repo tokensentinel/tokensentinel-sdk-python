@@ -2,6 +2,28 @@
 
 All notable changes to the TokenSentinel Python SDK are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] — 2026-07-12
+
+### Added
+- `Sentinel.mark_long_running(session_id)` / `unmark_long_running(session_id)` — opt a session out of the `zombie` rule (long research jobs).
+- `token_sentinel.rules.timeutil` — timezone-safe elapsed-time helpers used by windowed rules.
+- Default `tool_loop.polling_tools` allow-list (`check_status`, `get_status`, `poll`, …) to suppress legitimate status-poll loops.
+- Monotonic pagination suppression in `tool_loop` (e.g. `page=1,2,3` with otherwise-identical args).
+- OpenAI wrapper records client `base_url` on `CallRecord.raw_request` so `model_misroute` can normalize gateway model names.
+
+### Fixed
+- **Zombie:** pure tool-only sessions (never `user_facing_output`) now fire when the silence window and recent-call thresholds are met; evidence may include `never_user_facing: true`.
+- **Timezone:** mixing naive and aware `CallRecord.timestamp` values no longer raises inside rules (was swallowed and silently skipped detection).
+- **Session tags:** `Sentinel.session(tags=...)` registers tags so wrapped calls that only pass `_sentinel_session_id` still get chargeback tags stamped in `record_call`.
+- **Double-fire:** when both `tool_loop` and `retrieval_thrash` fire on the same evaluation, only `retrieval_thrash` is emitted.
+- **Model misroute:** `deepseek-chat` is no longer treated as a frontier misroute target (no self-recommend); `deepseek-reasoner` still routes to `deepseek-chat`.
+- **OpenAI streaming warning:** defensive fallback message no longer claims streaming is unimplemented (normal streams remain instrumented).
+
+### Changed
+- User documentation rewritten for the current product surface: 15 rules, 9 native providers, correct OpenAI streaming semantics, full public API, OSS vs paid cloud framing, post-call detection timing.
+- README documents [https://docs.tokensentinel.dev](https://docs.tokensentinel.dev) for PyPI long description.
+
+
 ## [1.0.0] — 2026-06-11
 
 Initial standalone release of the TokenSentinel Python SDK (`token-sentinel`), decoupled from the monorepo.

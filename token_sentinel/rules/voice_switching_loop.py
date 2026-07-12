@@ -78,6 +78,7 @@ from typing import Any
 
 from token_sentinel.events import CallRecord, LeakEvent
 from token_sentinel.rules.base import Rule
+from token_sentinel.rules.timeutil import elapsed_seconds
 
 # Method-name prefix matched against ``CallRecord.method``. The
 # ElevenLabs wrapper writes labels like ``"text_to_speech.convert"``,
@@ -121,7 +122,7 @@ class VoiceSwitchingLoopRule(Rule):
                 continue
             if not c.method.startswith(_METHOD_PREFIX):
                 continue
-            if (now - c.timestamp).total_seconds() > window:
+            if elapsed_seconds(now, c.timestamp) > window:
                 continue
             recent.append(c)
 
@@ -156,7 +157,7 @@ class VoiceSwitchingLoopRule(Rule):
 
             # Time span: oldest-to-newest in the cluster, rounded to 0.1s.
             timestamps = sorted(c.timestamp for c in group)
-            time_span_seconds = round((timestamps[-1] - timestamps[0]).total_seconds(), 1)
+            time_span_seconds = round(elapsed_seconds(timestamps[-1], timestamps[0]), 1)
 
             # Burn estimate: each extra voice replays the entire text
             # against the ElevenLabs synthesizer. Sum char counts from

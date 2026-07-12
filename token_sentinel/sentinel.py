@@ -357,7 +357,18 @@ class Sentinel:
             max_records_per_session=max_records_per_session,
             max_sessions=max_sessions,
         )
+        # Long-running session opt-out for the zombie rule. Shared mutable
+        # set injected into ZombieRule after load so mark_long_running works
+        # without coupling rules to Sentinel.
+        self._long_running_sessions: set[str] = set()
+        # Session id → chargeback tags registered via ``session(tags=...)``.
+        # Wrappers only pass session_id; ``record_call`` stamps tags here so
+        # the wrap path picks them up without mutating every provider wrapper.
+        self._session_tags: dict[str, dict[str, str]] = {}
+        self._session_tags_lock = Lock()
+
         self._rules: list[Rule] = self._load_rules(rules)
+        self._wire_zombie_long_running()
         self._handlers: list[LeakHandler] = []
         # Guards mutation/iteration of ``_handlers`` so that registering a new
         # handler while a dispatch is in flight (in another thread) cannot see
@@ -515,7 +526,47 @@ class Sentinel:
         # object — failed validation should leave no state behind.
         validated = _validate_session_tags(tags)
         sid = session_id if session_id else str(uuid.uuid4())
+        # Register tags so wrapped calls that only pass ``_sentinel_session_id``
+        # still get chargeback tags stamped in ``record_call``.
+        if validated:
+            with self._session_tags_lock:
+                self._session_tags[sid] = dict(validated)
+                self._prune_session_tags_locked()
         return Session(self, sid, validated)
+
+    def mark_long_running(self, session_id: str) -> None:
+        """Opt a session out of the ``zombie`` rule (long research jobs, etc.).
+
+        Idempotent. Clear with :meth:`unmark_long_running` when the session
+        should be watched again.
+        """
+        if not session_id:
+            raise ValueError("TokenSentinel: mark_long_running requires a non-empty session_id")
+        self._long_running_sessions.add(session_id)
+
+    def unmark_long_running(self, session_id: str) -> None:
+        """Remove a session from the zombie long-running allow-list."""
+        self._long_running_sessions.discard(session_id)
+
+    def _wire_zombie_long_running(self) -> None:
+        """Attach the shared long-running set to any loaded zombie rule.
+
+        Uses a private attribute (not ``config``) so the caller's config
+        dict identity is preserved for ``rule.config is sentinel.config``.
+        """
+        for rule in self._rules:
+            if rule.name == "zombie":
+                rule._long_running_sessions = self._long_running_sessions  # type: ignore[attr-defined]
+
+    def _prune_session_tags_locked(self) -> None:
+        """Bound tag registry size (same order as tracer max_sessions)."""
+        cap = self._max_sessions_for_burn
+        if cap is None or len(self._session_tags) <= cap:
+            return
+        # Drop arbitrary oldest keys — dict preserves insertion order (3.7+).
+        overflow = len(self._session_tags) - cap
+        for key in list(self._session_tags.keys())[:overflow]:
+            del self._session_tags[key]
 
     def _load_rules(self, requested: list[str] | str) -> list[Rule]:
         all_rules = default_rules(self.config)
@@ -835,6 +886,14 @@ class Sentinel:
         # — those are the enforcement signals the customer opted into.
         self._enforce_policy(call)
 
+        # Stamp chargeback tags from ``session(tags=...)`` when the wrapper
+        # only threaded ``_sentinel_session_id`` (empty CallRecord.tags).
+        if not call.tags:
+            with self._session_tags_lock:
+                registered = self._session_tags.get(call.session_id)
+            if registered:
+                call.tags = dict(registered)
+
         self.tracer.record(call)
         events: list[LeakEvent] = []
         session = self.tracer.session(call.session_id)
@@ -862,6 +921,13 @@ class Sentinel:
             if call.tags and not ev.tags:
                 ev.tags = dict(call.tags)
             events.append(ev)
+
+        # Prefer retrieval_thrash over tool_loop when both fire on the same
+        # evaluation — same RAG pattern, one signal.
+        if any(e.type == "retrieval_thrash" for e in events) and any(
+            e.type == "tool_loop" for e in events
+        ):
+            events = [e for e in events if e.type != "tool_loop"]
 
         # Policy trackers update AFTER the rule loop completes so an
         # oversized call doesn't double-count: the budget check above

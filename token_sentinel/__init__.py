@@ -19,7 +19,7 @@ from token_sentinel.events import (
 )
 from token_sentinel.sentinel import Sentinel
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __all__ = [
     "Sentinel",
     "LeakEvent",

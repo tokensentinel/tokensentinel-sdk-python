@@ -125,6 +125,7 @@ from typing import Any
 
 from token_sentinel.events import CallRecord, LeakEvent
 from token_sentinel.rules.base import Rule
+from token_sentinel.rules.timeutil import elapsed_seconds
 
 # Optional perceptual-hash dependency. The rule degrades to exact-byte
 # matching when these aren't installed — see ``_perceptual_hash`` for
@@ -160,7 +161,7 @@ class VisionReUploadRule(Rule):
         max_image_bytes = self.get("max_image_bytes", DEFAULT_MAX_IMAGE_BYTES)
 
         now = session[-1].timestamp
-        recent = [c for c in session if (now - c.timestamp).total_seconds() <= window]
+        recent = [c for c in session if elapsed_seconds(now, c.timestamp) <= window]
         if len(recent) < min_calls:
             return None
 
