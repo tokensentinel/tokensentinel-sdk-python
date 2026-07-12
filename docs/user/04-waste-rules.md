@@ -26,7 +26,7 @@ This page is the user-facing reference: what each rule detects, when it fires, d
 | [`rerank_thrash`](#14-rerank_thrash) | 0.75–0.9 | Identical Cohere rerank requests repeated in a window. |
 | [`repair_loop`](#15-repair_loop) | 0.65–0.9 | User corrections + near-identical agent regenerations. |
 
-All rules emit a [`LeakEvent`](./07-api-reference.md#leakevent) with the same shape. The `evidence` dict is rule-specific.
+All rules emit a [`LeakEvent`](./07-api-reference.md#leakevent--wasteevent) with the same shape. The `evidence` dict is rule-specific.
 
 Tune any rule's thresholds via the project `config` dict. The pattern is:
 
