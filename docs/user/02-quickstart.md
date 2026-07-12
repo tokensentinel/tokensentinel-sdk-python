@@ -1,5 +1,7 @@
 # Quickstart
 
+> **Documented for Python SDK `token-sentinel` 1.0.1.**
+
 Five-minute end-to-end tutorial. By the end you will have a working TokenSentinel install, a wrapped client, a registered leak handler, and a leak event in your terminal.
 
 We use Anthropic for the example because it is the most-deployed agent provider as of mid-2026. Substitute another provider freely — the API surface is identical (see [Providers](./05-providers.md)).

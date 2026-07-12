@@ -1,5 +1,8 @@
 # Providers
 
+> **Documented for Python SDK `token-sentinel` 1.0.1.**
+
+
 TokenSentinel ships first-class wrappers for nine native provider families and works transparently with any OpenAI-compatible chat/embeddings endpoint. This page is the canonical matrix for the open-source SDK.
 
 ## Choose your provider

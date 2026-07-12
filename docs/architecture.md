@@ -1,5 +1,7 @@
 # Architecture
 
+> **Documented for Python SDK `token-sentinel` 1.0.1.**
+
 ## Design principles
 
 1. **In-process by default.** runs entirely client-side. Zero network calls just to do detection. Cloud is opt-in.

@@ -1,5 +1,7 @@
 # Installation
 
+> **Documented for Python SDK `token-sentinel` 1.0.1** (PyPI package name: `token-sentinel`).
+
 TokenSentinel is published to PyPI as `token-sentinel`. The **core package has zero runtime dependencies** — provider SDKs and optional features are pulled in via extras so you only install what you use.
 
 ## Python version

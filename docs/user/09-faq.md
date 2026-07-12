@@ -1,5 +1,7 @@
 # FAQ
 
+> **Documented for Python SDK `token-sentinel` 1.0.1.**
+
 ## Open source SDK vs paid cloud
 
 | | **Open-source SDK** (`token-sentinel`) | **TokenSentinel Cloud** (separate product) |

@@ -1,5 +1,8 @@
 # API reference
 
+> **Documented for Python SDK `token-sentinel` 1.0.1.**  
+> Runtime version: `import token_sentinel; token_sentinel.__version__`
+
 Public surface exported from `token_sentinel` (stable, semver-tracked):
 
 ```python

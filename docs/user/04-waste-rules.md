@@ -1,5 +1,8 @@
 # Leak rules
 
+> **Documented for Python SDK `token-sentinel` 1.0.1.**
+
+
 TokenSentinel ships **fifteen** deterministic waste detection rules. Each is a pure function of the in-process per-session ring buffer plus your config — no I/O, no network calls, sub-millisecond p95 per rule.
 
 This page is the user-facing reference: what each rule detects, when it fires, default thresholds, how to tune, and a sample event payload. For the design rationale and false-positive analysis, see [`docs/waste-taxonomy.md`](../waste-taxonomy.md).

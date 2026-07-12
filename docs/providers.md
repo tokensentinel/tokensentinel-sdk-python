@@ -1,5 +1,7 @@
 # Provider Matrix
 
+> **Documented for Python SDK `token-sentinel` 1.0.1.**
+
 Canonical “what’s supported” reference for the open-source SDK. For narrative install + examples, prefer [docs/user/05-providers.md](user/05-providers.md).
 
 ## How dispatch works

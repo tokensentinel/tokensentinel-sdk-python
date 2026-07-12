@@ -1,5 +1,9 @@
 # TokenSentinel User Guide
 
+> **Python SDK version: `token-sentinel` 1.0.1**  
+> Install: `pip install "token-sentinel>=1.0.1,<2"` · Check: `python -c "import token_sentinel; print(token_sentinel.__version__)"`  
+> Changelog: [CHANGELOG.md](https://github.com/tokensentinel/tokensentinel-sdk-python/blob/main/CHANGELOG.md) on GitHub
+
 TokenSentinel is an **open-source Python SDK** that detects token waste in AI agents while a session is still active, and gives your app a callback to log, alert, or hard-stop the agent before the *next* call goes out.
 
 Detection runs **after** each provider response (that call is already billed). Intervention saves subsequent turns. Pair the free SDK with optional **TokenSentinel Cloud** (closed source, paid) for dashboards, policy enforcement, and Pro calibration — nothing phones home unless you set `cloud_endpoint` and `api_key`.

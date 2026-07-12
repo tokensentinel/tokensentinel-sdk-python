@@ -1,5 +1,8 @@
 # Quickstart — Anthropic
 
+> **Documented for Python SDK `token-sentinel` 1.0.1.**
+
+
 A 5-minute end-to-end: install, wrap, see a leak fire.
 
 ## 1. Install
