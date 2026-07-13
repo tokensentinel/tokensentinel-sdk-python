@@ -1,6 +1,6 @@
 # Leak rules
 
-> **Documented for Python SDK `token-sentinel` 1.0.1.**
+> **Documented for Python SDK `token-sentinel` 1.0.2.**
 
 
 TokenSentinel ships **fifteen** deterministic waste detection rules. Each is a pure function of the in-process per-session ring buffer plus your config — no I/O, no network calls, sub-millisecond p95 per rule.
@@ -739,7 +739,7 @@ Optional TokenSentinel Cloud can run LLM-as-judge ratification on gray-zone conf
 
 Also planned / partial on the roadmap:
 
-- Semantic similarity for `tool_loop` (sentence-transformers via `[embeddings]` extra — extra exists; rule path not fully wired as of 1.0.1).
+- Semantic similarity for `tool_loop` (sentence-transformers via `[embeddings]` extra — extra exists; rule path not fully wired as of 1.0.2).
 - Per-rule mode (e.g., `block` only on `embedding_waste`).
 - Polling-tool allow-lists and pagination suppressors for `tool_loop`.
 - Context-token-entropy refinement for `context_bloat`.

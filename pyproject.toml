@@ -1,11 +1,13 @@
 [project]
 name = "token-sentinel"
-version = "1.0.1"
+version = "1.0.2"
 description = "Predictive token-waste detection for AI agents"
-readme = "README.md"
+# README long_description is built by hatch_build.py (relative → absolute for PyPI).
+# On-disk README.md keeps relative links for GitHub DX.
+dynamic = ["readme"]
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-authors = [{ name = "TokenSentinel contributors", email = "shakyasmreta@gmail.com" }]
+authors = [{ name = "TokenSentinel contributors", email = "hello@tokensentinel.dev" }]
 keywords = ["llm", "agents", "finops", "observability", "anthropic", "openai", "tokens", "cost"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -89,6 +91,10 @@ Changelog = "https://github.com/tokensentinel/tokensentinel-sdk-python/blob/main
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# Rewrite relative README links to GitHub absolute URLs in package metadata only.
+[tool.hatch.metadata.hooks.custom]
+path = "hatch_build.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["token_sentinel"]
 
@@ -101,6 +107,8 @@ include = [
     "LICENSE",
     "README.md",
     "pyproject.toml",
+    "hatch_build.py",
+    "CHANGELOG.md",
 ]
 
 [tool.ruff]

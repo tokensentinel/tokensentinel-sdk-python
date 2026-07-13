@@ -1,6 +1,6 @@
 # Quickstart — OpenAI
 
-> **Documented for Python SDK `token-sentinel` 1.0.1.**
+> **Documented for Python SDK `token-sentinel` 1.0.2.**
 
 
 A 5-minute end-to-end: install, wrap, see a leak fire.

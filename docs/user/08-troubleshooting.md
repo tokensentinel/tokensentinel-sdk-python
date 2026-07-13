@@ -1,6 +1,6 @@
 # Troubleshooting
 
-> **Documented for Python SDK `token-sentinel` 1.0.1.**
+> **Documented for Python SDK `token-sentinel` 1.0.2.**
 
 
 Practical debugging by symptom. If something is missing, open a GitHub issue with a minimal repro and `token_sentinel.__version__`.

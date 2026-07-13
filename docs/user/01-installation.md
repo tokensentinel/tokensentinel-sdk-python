@@ -1,6 +1,6 @@
 # Installation
 
-> **Documented for Python SDK `token-sentinel` 1.0.1** (PyPI package name: `token-sentinel`).
+> **Documented for Python SDK `token-sentinel` 1.0.2** (PyPI package name: `token-sentinel`).
 
 TokenSentinel is published to PyPI as `token-sentinel`. The **core package has zero runtime dependencies** — provider SDKs and optional features are pulled in via extras so you only install what you use.
 
@@ -69,7 +69,7 @@ pip install token-sentinel[all]
 python -c "from token_sentinel import Sentinel, __version__; print(__version__, Sentinel.__module__)"
 ```
 
-Expected output starts with `1.0.1` (or your installed version) and `token_sentinel.sentinel`.
+Expected output starts with `1.0.2` (or your installed version) and `token_sentinel.sentinel`.
 
 To verify a provider extra and wrapper dispatch (no real network call required for wrap itself):
 
@@ -94,7 +94,7 @@ Each line should print `<provider> ok`. If you see `Unsupported client type`, th
 | Path | What you get | Cost |
 |---|---|---|
 | **SDK only** (this package) | All 15 rules, all wrappers, `log` / `alert` / `block`, zero phoning home | Free (Apache-2.0) |
-| **TokenSentinel Cloud** (closed source) | Hosted dashboards, retention, webhooks, Intervention Pack (budgets / velocity / kill-switch), Pro judge + drift + composites | Paid tiers — see [tokensentinel.dev](https://tokensentinel.dev) |
+| **TokenSentinel Cloud** (proprietary) | Hosted dashboards, retention, webhooks, Intervention Pack (budgets / velocity / kill-switch), Pro judge + drift + composites | Paid tiers — see [tokensentinel.dev](https://tokensentinel.dev) |
 
 Nothing leaves the process unless you set **both** `cloud_endpoint=` and `api_key=` on `Sentinel(...)`. The SDK is fully functional without cloud.
 

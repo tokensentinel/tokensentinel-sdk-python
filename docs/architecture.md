@@ -1,6 +1,6 @@
 # Architecture
 
-> **Documented for Python SDK `token-sentinel` 1.0.1.**
+> **Documented for Python SDK `token-sentinel` 1.0.2.**
 
 ## Design principles
 

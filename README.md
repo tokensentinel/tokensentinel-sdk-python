@@ -121,7 +121,7 @@ Cloud event shipping requires `cloud_endpoint` **and** `api_key` and works in **
 
 TokenSentinel instruments at the LLM-client layer, so it transparently catches traffic from MCP hosts, RAG pipelines, and orchestration frameworks (LangChain, LangGraph, CrewAI, AutoGen, Pydantic AI). See [docs/integration-patterns.md](docs/integration-patterns.md).
 
-## Cloud (optional, paid, closed source)
+## Cloud (optional, proprietary)
 
 This repository is the **Apache-2.0 SDK only**. The commercial product is separate:
 
@@ -146,9 +146,9 @@ python -m tokensentinel_migrate helicone --helicone-api-key sk-... --tokensentin
 
 ## Status
 
-**Current release: 1.0.1** — 15 deterministic rules, 9 native providers (Anthropic, OpenAI, Gemini, Bedrock, Voyage, Cohere, Replicate, Deepgram, ElevenLabs), streaming + async, and optional TokenSentinel Cloud policy integration.
+**Current release: 1.0.2** — 15 deterministic rules, 9 native providers (Anthropic, OpenAI, Gemini, Bedrock, Voyage, Cohere, Replicate, Deepgram, ElevenLabs), streaming + async, and optional TokenSentinel Cloud policy integration.
 
-See [CHANGELOG.md](CHANGELOG.md) for the full 1.0.1 release notes (zombie / tags / tool-loop FP fixes, docs accuracy pass).
+See [CHANGELOG.md](CHANGELOG.md) for release notes (1.0.2 contact/metadata; 1.0.1 rule fixes and docs accuracy pass).
 
 The public API surface (`Sentinel`, `wrap`, `on_leak` / `on_waste`, `record_call`, `session`, `mark_long_running`, `LeakEvent` / `WasteEvent`, `CallRecord`, `LeakDetected` / `WasteDetected`, plus policy exceptions `BudgetExceeded`, `VelocityExceeded`, `KillSwitchActive`) is stable and follows semver — pin deliberately (e.g. `token-sentinel>=1.0,<2`).
 
@@ -175,7 +175,7 @@ Also in this repository:
 
 ## Contact & Support
 
-For support, feedback, or inquiries: [shakyasmreta@gmail.com](mailto:shakyasmreta@gmail.com) · [tokensentinel.dev](https://tokensentinel.dev) · [docs.tokensentinel.dev](https://docs.tokensentinel.dev).
+For support: [support@tokensentinel.dev](mailto:support@tokensentinel.dev) · general: [hello@tokensentinel.dev](mailto:hello@tokensentinel.dev) · [tokensentinel.dev](https://tokensentinel.dev) · [docs.tokensentinel.dev](https://docs.tokensentinel.dev).
 
 ## License
 

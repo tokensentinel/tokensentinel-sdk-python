@@ -1,6 +1,6 @@
 # API reference
 
-> **Documented for Python SDK `token-sentinel` 1.0.1.**  
+> **Documented for Python SDK `token-sentinel` 1.0.2.**  
 > Runtime version: `import token_sentinel; token_sentinel.__version__`
 
 Public surface exported from `token_sentinel` (stable, semver-tracked):
@@ -319,4 +319,4 @@ See [Integrations](./06-integrations.md).
 
 **Not stable:** tracer/rule/wrapper internals; exact confidence formulas; `suggested_action` string wording; cloud wire extras.
 
-`__version__` is the installed package version string (e.g. `"1.0.1"`).
+`__version__` is the installed package version string (e.g. `"1.0.2"`).

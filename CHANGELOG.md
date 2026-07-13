@@ -2,6 +2,11 @@
 
 All notable changes to the TokenSentinel Python SDK are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] — 2026-07-14
+
+### Changed
+- Documentation version banners and install pins updated for the 1.0.2 release line properly with previous release.
+
 ## [1.0.1] — 2026-07-12
 
 ### Added

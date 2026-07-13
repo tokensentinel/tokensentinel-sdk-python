@@ -1,12 +1,12 @@
 # FAQ
 
-> **Documented for Python SDK `token-sentinel` 1.0.1.**
+> **Documented for Python SDK `token-sentinel` 1.0.2.**
 
 ## Open source SDK vs paid cloud
 
 | | **Open-source SDK** (`token-sentinel`) | **TokenSentinel Cloud** (separate product) |
 |---|---|---|
-| License | Apache-2.0 | Closed source |
+| License | Apache-2.0 | proprietary |
 | What it is | In-process rules + provider wrappers | Hosted API, dashboard, policy, Pro features |
 | Cost | Free forever | Paid tiers (Team / Pro / Enterprise) |
 | Network | Nothing leaves the process by default | Only if you set `cloud_endpoint` + `api_key` |

@@ -1,6 +1,6 @@
 # Leak taxonomy
 
-> **Documented for Python SDK `token-sentinel` 1.0.1.**
+> **Documented for Python SDK `token-sentinel` 1.0.2.**
 
 
 The **fifteen** waste classes detected by the current SDK. Each entry: definition, signal, default thresholds, false-positive hazards, example, and remediation.

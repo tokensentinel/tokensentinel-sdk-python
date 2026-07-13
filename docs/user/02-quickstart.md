@@ -1,6 +1,6 @@
 # Quickstart
 
-> **Documented for Python SDK `token-sentinel` 1.0.1.**
+> **Documented for Python SDK `token-sentinel` 1.0.2.**
 
 Five-minute end-to-end tutorial. By the end you will have a working TokenSentinel install, a wrapped client, a registered leak handler, and a leak event in your terminal.
 
