@@ -1,5 +1,7 @@
 # Quickstart
 
+> **Documented for Python SDK `token-sentinel` 1.0.3.**
+
 Five-minute end-to-end tutorial. By the end you will have a working TokenSentinel install, a wrapped client, a registered leak handler, and a leak event in your terminal.
 
 We use Anthropic for the example because it is the most-deployed agent provider as of mid-2026. Substitute another provider freely — the API surface is identical (see [Providers](./05-providers.md)).
@@ -88,7 +90,7 @@ That fired because:
 - The prompt contained the keyword `"classify"` — confirms classification shape.
 - The model was `claude-sonnet-4-6` — a frontier model, where Haiku would do.
 
-The `recommended_alternative` field tells you which cheaper model to route to. The `estimated_burn` is the dollar cost of *this single call*; in production where this fires hundreds of times a day, multiply accordingly.
+The `recommended_alternative` field tells you which cheaper model to route to. The `estimated_burn` is an approximate dollar cost of *this single call* (or a short extrapolated window for some rules); in production where this fires hundreds of times a day, use it comparatively across sessions — not as a CFO invoice line.
 
 ## Step 5 — make sense of the event fields
 
@@ -102,7 +104,7 @@ Every leak emits a `LeakEvent` dataclass with these fields. You will see the sam
 | `session_id` | str | Identifies a single agent run. Defaults to per-call UUID; pass a stable ID to group calls (see below). |
 | `rule` | str | Which rule fired, prefixed with the rules-engine version (e.g. `v0.model_misroute`). |
 | `evidence` | dict | Rule-specific payload. Keys are documented per rule in [Leak rules](./04-waste-rules.md). Always include enough detail to reproduce the firing. |
-| `estimated_burn` | float | Rough dollar figure for the wasted spend this leak represents. Treat it as a sort key, not an invoice. |
+| `estimated_burn` | float | Approximate USD for the waste signal. **Model-aware** for common Anthropic/OpenAI/Gemini/… families (1.0.3+); cache-read tokens discounted when present. Treat as a FinOps sort key, **not** an invoice. |
 | `suggested_action` | str | Machine-readable hint for what to do — `route_to_claude-haiku-4-5`, `add_embedding_cache`, `pause_for_human_review`, etc. |
 | `raised_at` | datetime | UTC timestamp the event was emitted. |
 

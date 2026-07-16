@@ -63,11 +63,24 @@ from typing import Any
 
 from token_sentinel.events import CallRecord, LeakEvent
 from token_sentinel.rules.base import Rule
+from token_sentinel.rules.timeutil import elapsed_seconds
 
 # Default DoS caps. Exposed as module-level constants so retrieval_thrash and
 # tests can reference them without re-deriving the numbers.
 DEFAULT_MAX_ARG_BYTES = 65536  # 64 KB per arg JSON before n-gram extraction
 DEFAULT_MAX_TOTAL_CORPUS_BYTES = 1_048_576  # 1 MB across all args in the window
+
+# Default polling allow-list. Exact tool-name matches (case-insensitive) are
+# skipped so status-poll loops do not fire tool_loop. Customer override via
+# ``tool_loop.polling_tools`` (list/tuple of names). Empty list disables.
+DEFAULT_POLLING_TOOLS: tuple[str, ...] = (
+    "check_status",
+    "get_status",
+    "poll",
+    "poll_status",
+    "wait_for",
+    "wait_until",
+)
 
 
 class ToolLoopRule(Rule):
@@ -89,9 +102,10 @@ class ToolLoopRule(Rule):
         max_arg_bytes = self.get("max_arg_bytes", DEFAULT_MAX_ARG_BYTES)
         max_total_corpus_bytes = self.get("max_total_corpus_bytes", DEFAULT_MAX_TOTAL_CORPUS_BYTES)
         include_raw_args = self.get("include_raw_args", False)
+        polling_tools = {str(n).lower() for n in self.get("polling_tools", DEFAULT_POLLING_TOOLS)}
 
         now = session[-1].timestamp
-        recent = [c for c in session if (now - c.timestamp).total_seconds() <= window]
+        recent = [c for c in session if elapsed_seconds(now, c.timestamp) <= window]
 
         # group tool invocations by tool name
         by_tool: dict[str, list[dict[str, Any]]] = {}
@@ -101,6 +115,10 @@ class ToolLoopRule(Rule):
 
         for tool_name, calls in by_tool.items():
             if len(calls) < min_calls:
+                continue
+            if tool_name.lower() in polling_tools:
+                continue
+            if _is_monotonic_pagination(calls):
                 continue
 
             similarity = _mean_pairwise_similarity(
@@ -130,6 +148,56 @@ class ToolLoopRule(Rule):
                     suggested_action="pause_for_human_review",
                 )
         return None
+
+
+def _is_monotonic_pagination(calls: list[dict[str, Any]]) -> bool:
+    """True if args differ only by a single numeric field that strictly increases.
+
+    Suppresses legitimate page=1, page=2, page=3 loops. Requires ≥2 calls
+    and a common key whose values form a strictly increasing numeric
+    sequence; all other keys must be equal (JSON-stable compare).
+    """
+    if len(calls) < 2:
+        return False
+    arg_list: list[dict[str, Any]] = []
+    for tc in calls:
+        args = tc.get("arguments", {})
+        if not isinstance(args, dict) or not args:
+            return False
+        arg_list.append(args)
+
+    keys0 = set(arg_list[0].keys())
+    if not keys0 or any(set(a.keys()) != keys0 for a in arg_list[1:]):
+        return False
+
+    # Candidate numeric keys: every call has a number (int/float, not bool).
+    numeric_keys: list[str] = []
+    for k in keys0:
+        vals = [a[k] for a in arg_list]
+        if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in vals):
+            numeric_keys.append(k)
+
+    if not numeric_keys:
+        return False
+
+    for nk in numeric_keys:
+        series = [float(a[nk]) for a in arg_list]
+        if any(series[i] >= series[i + 1] for i in range(len(series) - 1)):
+            continue
+        # All non-page keys identical across calls?
+        other_keys = keys0 - {nk}
+        stable = True
+        for k in other_keys:
+            ref = arg_list[0][k]
+            for a in arg_list[1:]:
+                if a[k] != ref:
+                    stable = False
+                    break
+            if not stable:
+                break
+        if stable:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +580,8 @@ def _estimate_burn(recent: list[CallRecord]) -> float:
     """Rough USD estimate of next 3 cycles at the current burn rate."""
     if not recent:
         return 0.0
-    avg_tokens = sum(c.prompt_tokens + c.completion_tokens for c in recent) / len(recent)
-    cost_per_call = avg_tokens * 9e-6
-    return round(cost_per_call * 3, 4)
+    from token_sentinel.pricing import estimate_call_usd
+
+    per_call = [estimate_call_usd(c) for c in recent]
+    avg_cost = sum(per_call) / len(per_call)
+    return round(avg_cost * 3, 4)

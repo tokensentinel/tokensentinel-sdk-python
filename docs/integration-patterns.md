@@ -1,5 +1,8 @@
 # Integration patterns
 
+> **Documented for Python SDK `token-sentinel` 1.0.3.**
+
+
 TokenSentinel instruments LLM clients **at the API call layer**. Whatever framework, host, or orchestrator sits above the LLM client is largely irrelevant: as long as the underlying call goes through `anthropic.Anthropic`, `openai.OpenAI`, `google.genai.Client`, a Vertex client, or a boto3 Bedrock client, Sentinel sees every call and runs every rule.
 
 That single integration point is what lets a five-line install cover MCP hosts, RAG pipelines, and every major orchestration framework. This doc shows the wrap site for each.

@@ -23,6 +23,12 @@ from token_sentinel.events import (
     LeakEvent,
     VelocityExceeded,
 )
+from token_sentinel.pricing import (
+    FALLBACK_USD_PER_TOKEN,
+    ModelRate,
+    estimate_call_usd,
+    maybe_fill_missing_tokens,
+)
 from token_sentinel.rules import Rule, default_rules
 from token_sentinel.tracer import Tracer
 
@@ -43,15 +49,11 @@ LeakHandler = Callable[[LeakEvent], None]
 # and the cloud's velocity_max_tokens_per_min semantics.
 _VELOCITY_WINDOW_SECONDS = 60.0
 
-# Per-call USD burn estimate. This is the same heuristic that
-# ``rules/tool_loop.py``'s ``_estimate_burn`` uses for its 3-cycle
-# extrapolation: average per-token cost across the major frontier models
-# rounds to about $9e-6 per token. We use it here at the per-call scale to
-# decide "would this call push us over the session budget?" before the rule
-# loop runs. Identical constant on purpose — deviation would create
-# confusion when a customer sees the rule-side and policy-side burn numbers
-# disagree.
-_BURN_USD_PER_TOKEN = 9e-6
+# Fallback flat rate when the model is unknown. Prefer model-aware rates
+# from :mod:`token_sentinel.pricing` (``estimate_call_usd``). Kept as an
+# alias of ``FALLBACK_USD_PER_TOKEN`` so historical imports / tests that
+# referenced the private name still resolve.
+_BURN_USD_PER_TOKEN = FALLBACK_USD_PER_TOKEN
 
 
 # Sentinel value distinguishing "kwarg not passed (use cloud_endpoint
@@ -225,18 +227,19 @@ class Session:
         return f"Session(session_id={self.session_id!r}, tags=[{tag_summary}])"
 
 
-def _estimate_call_burn_usd(call: CallRecord) -> float:
+def _estimate_call_burn_usd(
+    call: CallRecord,
+    pricing_table: dict[str, ModelRate] | None = None,
+) -> float:
     """Estimate the USD burn for a single call.
 
-    Uses the same per-token coefficient as :func:`tool_loop._estimate_burn`
-    so the policy plane and the rule engine agree on units. Negative token
-    counts (which would only arrive from a buggy provider parser) are
-    clamped to zero so we never produce a negative burn that could mask a
-    real overage.
+    Model-aware via :func:`token_sentinel.pricing.estimate_call_usd` when the
+    model is in the rate table; otherwise the historical flat average
+    (``FALLBACK_USD_PER_TOKEN``). Cache-read tokens in ``usage_extra`` are
+    billed at the discounted cache-read rate. Negative token counts are
+    clamped to zero inside the estimator.
     """
-    prompt = max(0, call.prompt_tokens)
-    completion = max(0, call.completion_tokens)
-    return (prompt + completion) * _BURN_USD_PER_TOKEN
+    return estimate_call_usd(call, pricing_table=pricing_table)
 
 
 class Sentinel:
@@ -296,12 +299,18 @@ class Sentinel:
         judge_threshold_low: float = 0.5,
         judge_threshold_high: float = 0.8,
         judge_calls_per_month_max: int = 1_800_000,
+        # Optional override of the built-in model price table used for
+        # ``estimated_burn`` and policy budget projection. Keys are model
+        # name prefixes; values are :class:`~token_sentinel.pricing.ModelRate`.
+        # Pass ``None`` (default) to use the shipped table + flat fallback.
+        pricing_table: dict[str, ModelRate] | None = None,
     ):
         self.project = project
         self.mode = mode
         self.config = config or {}
         self.cloud_endpoint = cloud_endpoint
         self.api_key = api_key
+        self.pricing_table = pricing_table
         # Clamp min_confidence to [0.0, 1.0] (LOW-4). A customer who passes
         # 2.0 would otherwise see no events fire ever; -1.0 would let every
         # event through. Both are surprising silent failures — clamp instead.
@@ -357,7 +366,18 @@ class Sentinel:
             max_records_per_session=max_records_per_session,
             max_sessions=max_sessions,
         )
+        # Long-running session opt-out for the zombie rule. Shared mutable
+        # set injected into ZombieRule after load so mark_long_running works
+        # without coupling rules to Sentinel.
+        self._long_running_sessions: set[str] = set()
+        # Session id → chargeback tags registered via ``session(tags=...)``.
+        # Wrappers only pass session_id; ``record_call`` stamps tags here so
+        # the wrap path picks them up without mutating every provider wrapper.
+        self._session_tags: dict[str, dict[str, str]] = {}
+        self._session_tags_lock = Lock()
+
         self._rules: list[Rule] = self._load_rules(rules)
+        self._wire_zombie_long_running()
         self._handlers: list[LeakHandler] = []
         # Guards mutation/iteration of ``_handlers`` so that registering a new
         # handler while a dispatch is in flight (in another thread) cannot see
@@ -515,7 +535,47 @@ class Sentinel:
         # object — failed validation should leave no state behind.
         validated = _validate_session_tags(tags)
         sid = session_id if session_id else str(uuid.uuid4())
+        # Register tags so wrapped calls that only pass ``_sentinel_session_id``
+        # still get chargeback tags stamped in ``record_call``.
+        if validated:
+            with self._session_tags_lock:
+                self._session_tags[sid] = dict(validated)
+                self._prune_session_tags_locked()
         return Session(self, sid, validated)
+
+    def mark_long_running(self, session_id: str) -> None:
+        """Opt a session out of the ``zombie`` rule (long research jobs, etc.).
+
+        Idempotent. Clear with :meth:`unmark_long_running` when the session
+        should be watched again.
+        """
+        if not session_id:
+            raise ValueError("TokenSentinel: mark_long_running requires a non-empty session_id")
+        self._long_running_sessions.add(session_id)
+
+    def unmark_long_running(self, session_id: str) -> None:
+        """Remove a session from the zombie long-running allow-list."""
+        self._long_running_sessions.discard(session_id)
+
+    def _wire_zombie_long_running(self) -> None:
+        """Attach the shared long-running set to any loaded zombie rule.
+
+        Uses a private attribute (not ``config``) so the caller's config
+        dict identity is preserved for ``rule.config is sentinel.config``.
+        """
+        for rule in self._rules:
+            if rule.name == "zombie":
+                rule._long_running_sessions = self._long_running_sessions  # type: ignore[attr-defined]
+
+    def _prune_session_tags_locked(self) -> None:
+        """Bound tag registry size (same order as tracer max_sessions)."""
+        cap = self._max_sessions_for_burn
+        if cap is None or len(self._session_tags) <= cap:
+            return
+        # Drop arbitrary oldest keys — dict preserves insertion order (3.7+).
+        overflow = len(self._session_tags) - cap
+        for key in list(self._session_tags.keys())[:overflow]:
+            del self._session_tags[key]
 
     def _load_rules(self, requested: list[str] | str) -> list[Rule]:
         all_rules = default_rules(self.config)
@@ -833,7 +893,19 @@ class Sentinel:
         # policy code path NEVER crashes the user's call. The exceptions
         # listed in the ``raise`` re-list are the only ones that propagate
         # — those are the enforcement signals the customer opted into.
+        # Optional tiktoken fill when the provider omitted usage (streaming
+        # without include_usage, etc.). Soft no-op without the extra.
+        maybe_fill_missing_tokens(call)
+
         self._enforce_policy(call)
+
+        # Stamp chargeback tags from ``session(tags=...)`` when the wrapper
+        # only threaded ``_sentinel_session_id`` (empty CallRecord.tags).
+        if not call.tags:
+            with self._session_tags_lock:
+                registered = self._session_tags.get(call.session_id)
+            if registered:
+                call.tags = dict(registered)
 
         self.tracer.record(call)
         events: list[LeakEvent] = []
@@ -862,6 +934,13 @@ class Sentinel:
             if call.tags and not ev.tags:
                 ev.tags = dict(call.tags)
             events.append(ev)
+
+        # Prefer retrieval_thrash over tool_loop when both fire on the same
+        # evaluation — same RAG pattern, one signal.
+        if any(e.type == "retrieval_thrash" for e in events) and any(
+            e.type == "tool_loop" for e in events
+        ):
+            events = [e for e in events if e.type != "tool_loop"]
 
         # Policy trackers update AFTER the rule loop completes so an
         # oversized call doesn't double-count: the budget check above
@@ -1088,7 +1167,7 @@ class Sentinel:
         # it runs — same heuristic as ``rules/tool_loop.py``'s burn estimator
         # so the SDK side and the cloud side agree on the units.
         if policy.budget_usd_per_session is not None:
-            next_call_burn = _estimate_call_burn_usd(call)
+            next_call_burn = _estimate_call_burn_usd(call, pricing_table=self.pricing_table)
             with self._policy_lock:
                 current_burn = self._session_burn.get(call.session_id, 0.0)
             projected = current_burn + next_call_burn
@@ -1142,6 +1221,8 @@ class Sentinel:
                         "this_call_tokens": this_call_tokens,
                         "max_tokens_per_min": policy.max_tokens_per_min,
                     },
+                    # Rough window cost using this call's model rate on the
+                    # projected token volume (velocity is token-capped, not $).
                     estimated_burn=round(projected_tokens * _BURN_USD_PER_TOKEN, 6),
                     suggested_action="halt_or_throttle",
                     raised_at=datetime.now(timezone.utc),
@@ -1179,7 +1260,7 @@ class Sentinel:
         if self._policy_client is None:
             return
 
-        burn_usd = _estimate_call_burn_usd(call)
+        burn_usd = _estimate_call_burn_usd(call, pricing_table=self.pricing_table)
         tokens = max(0, call.prompt_tokens) + max(0, call.completion_tokens)
         now = time.monotonic()
 

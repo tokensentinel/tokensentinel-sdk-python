@@ -1,11 +1,13 @@
 [project]
 name = "token-sentinel"
-version = "1.0.0"
+version = "1.0.3"
 description = "Predictive token-waste detection for AI agents"
-readme = "README.md"
+# README long_description is built by hatch_build.py (relative → absolute for PyPI).
+# On-disk README.md keeps relative links for GitHub DX.
+dynamic = ["readme"]
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-authors = [{ name = "TokenSentinel contributors", email = "shakyasmreta@gmail.com" }]
+authors = [{ name = "TokenSentinel contributors", email = "hello@tokensentinel.dev" }]
 keywords = ["llm", "agents", "finops", "observability", "anthropic", "openai", "tokens", "cost"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -32,6 +34,9 @@ replicate = ["replicate>=0.40"]
 deepgram = ["deepgram-sdk>=3.0"]
 elevenlabs = ["elevenlabs>=1.0"]
 embeddings = ["sentence-transformers>=2.7.0", "numpy>=1.26.0"]
+# Optional local token counting when provider usage is missing (e.g. OpenAI
+# streams without stream_options.include_usage). Used only for burn estimates.
+tiktoken = ["tiktoken>=0.7.0"]
 audio-metadata = ["mutagen>=1.47"]
 # Perceptual fallback for vision_re_upload. Catches re-uploads where
 # bytes differ (resize / recompression) but the image is visually the same.
@@ -61,6 +66,7 @@ all = [
     "elevenlabs>=1.0",
     "sentence-transformers>=2.7.0",
     "numpy>=1.26.0",
+    "tiktoken>=0.7.0",
     "mutagen>=1.47",
     "imagehash>=4.3",
     "Pillow>=10",
@@ -89,6 +95,10 @@ Changelog = "https://github.com/tokensentinel/tokensentinel-sdk-python/blob/main
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# Rewrite relative README links to GitHub absolute URLs in package metadata only.
+[tool.hatch.metadata.hooks.custom]
+path = "hatch_build.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["token_sentinel"]
 
@@ -101,6 +111,8 @@ include = [
     "LICENSE",
     "README.md",
     "pyproject.toml",
+    "hatch_build.py",
+    "CHANGELOG.md",
 ]
 
 [tool.ruff]

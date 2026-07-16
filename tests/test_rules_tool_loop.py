@@ -301,15 +301,8 @@ def test_confidence_capped_at_0_99(make_call, now):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason="V1 mitigation: detect monotonic increment in numeric arg fields",
-    strict=False,
-)
 def test_paged_calls_with_monotonic_page_should_not_fire(make_call, now):
-    """Legitimate pagination — arguments differ only in monotonic page index.
-
-    V0 has no suppression, so this currently fires. V1 should suppress.
-    """
+    """Legitimate pagination — arguments differ only in monotonic page index."""
     rule = ToolLoopRule({})
     session = [
         make_call(
@@ -326,12 +319,8 @@ def test_paged_calls_with_monotonic_page_should_not_fire(make_call, now):
     assert _evaluate(rule, session) is None
 
 
-@pytest.mark.xfail(
-    reason="V1 mitigation: per-customer polling_tools allow-list",
-    strict=False,
-)
 def test_polling_check_status_should_not_fire(make_call, now):
-    """check_status() called repeatedly until ready — allow-list candidate."""
+    """check_status is on the default polling_tools allow-list."""
     rule = ToolLoopRule({})
     session = [
         make_call(

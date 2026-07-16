@@ -1,5 +1,8 @@
 # Integrations
 
+> **Documented for Python SDK `token-sentinel` 1.0.3.**
+
+
 TokenSentinel instruments LLM traffic in two ways:
 
 1. **Client wrap** — `sentinel.wrap(provider_client)` on Anthropic, OpenAI (+ compatible), Gemini, Bedrock, Voyage, Cohere V2, Replicate, Deepgram, or ElevenLabs.

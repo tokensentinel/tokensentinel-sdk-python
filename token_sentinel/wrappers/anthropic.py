@@ -203,10 +203,18 @@ class _UsageAccumulator:
     def __init__(self) -> None:
         self.input_tokens: int = 0
         self.output_tokens: int = 0
+        self.cache_read_tokens: int = 0
         self.stop_reason: Any = None
         self.tool_calls: list[dict[str, Any]] = []
         self.has_text_output: bool = False
         self._final_message: Any = None
+
+    def _note_cache(self, usage: Any) -> None:
+        from token_sentinel.pricing import extract_anthropic_cache_read
+
+        cache_read = extract_anthropic_cache_read(usage)
+        if cache_read:
+            self.cache_read_tokens = max(self.cache_read_tokens, cache_read)
 
     def observe(self, event: Any) -> None:
         try:
@@ -221,6 +229,7 @@ class _UsageAccumulator:
                     out = getattr(usage, "output_tokens", None)
                     if isinstance(out, int):
                         self.output_tokens = max(self.output_tokens, out)
+                    self._note_cache(usage)
             elif etype == "message_delta":
                 usage = getattr(event, "usage", None)
                 if usage is not None:
@@ -233,6 +242,7 @@ class _UsageAccumulator:
                     inp = getattr(usage, "input_tokens", None)
                     if isinstance(inp, int):
                         self.input_tokens = max(self.input_tokens, inp)
+                    self._note_cache(usage)
                 delta = getattr(event, "delta", None)
                 stop_reason = getattr(delta, "stop_reason", None)
                 if stop_reason is not None:
@@ -263,6 +273,7 @@ class _UsageAccumulator:
                 out = getattr(usage, "output_tokens", None)
                 if isinstance(out, int):
                     self.output_tokens = max(self.output_tokens, out)
+                self._note_cache(usage)
             if self.stop_reason is None:
                 self.stop_reason = getattr(final_message, "stop_reason", None)
             for block in getattr(final_message, "content", []) or []:
@@ -546,6 +557,13 @@ def _build_record_from_message(
     prompt_tokens = getattr(usage, "input_tokens", 0) if usage else 0
     completion_tokens = getattr(usage, "output_tokens", 0) if usage else 0
 
+    from token_sentinel.pricing import extract_anthropic_cache_read
+
+    usage_extra: dict[str, Any] = {}
+    cache_read = extract_anthropic_cache_read(usage)
+    if cache_read:
+        usage_extra["cache_read_tokens"] = cache_read
+
     tool_calls: list[dict[str, Any]] = []
     has_text_output = False
     for block in getattr(response, "content", []) or []:
@@ -576,6 +594,7 @@ def _build_record_from_message(
         user_facing_output=user_facing_output,
         raw_request={"messages": messages, "tools": tools, "max_tokens": max_tokens},
         raw_response_meta={"stop_reason": getattr(response, "stop_reason", None)},
+        usage_extra=usage_extra,
     )
 
 
@@ -594,6 +613,10 @@ def _build_record_from_accumulator(
 
     user_facing_output = accumulator.has_text_output and not accumulator.tool_calls
 
+    usage_extra: dict[str, Any] = {}
+    if accumulator.cache_read_tokens:
+        usage_extra["cache_read_tokens"] = accumulator.cache_read_tokens
+
     return CallRecord(
         session_id=session_id,
         timestamp=datetime.now(timezone.utc),
@@ -608,6 +631,7 @@ def _build_record_from_accumulator(
         user_facing_output=user_facing_output,
         raw_request={"messages": messages, "tools": tools, "max_tokens": max_tokens},
         raw_response_meta={"stop_reason": accumulator.stop_reason, "streamed": True},
+        usage_extra=usage_extra,
     )
 
 

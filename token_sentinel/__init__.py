@@ -17,9 +17,15 @@ from token_sentinel.events import (
     WasteDetected,
     WasteEvent,
 )
+from token_sentinel.pricing import (
+    ModelRate,
+    default_pricing_table,
+    estimate_call_usd,
+    estimate_usd,
+)
 from token_sentinel.sentinel import Sentinel
 
-__version__ = "1.0.0"
+__version__ = "1.0.3"
 __all__ = [
     "Sentinel",
     "LeakEvent",
@@ -30,4 +36,8 @@ __all__ = [
     "BudgetExceeded",
     "VelocityExceeded",
     "KillSwitchActive",
+    "ModelRate",
+    "estimate_usd",
+    "estimate_call_usd",
+    "default_pricing_table",
 ]

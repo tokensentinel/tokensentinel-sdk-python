@@ -79,8 +79,8 @@ FRONTIER_PREFIXES = (
     # Google
     "gemini-2.5-pro",
     "gemini-2.0-pro",
-    # DeepSeek
-    "deepseek-chat",
+    # DeepSeek — only reasoner is treated as frontier misroute; chat (V3) is the
+    # recommended cheap path and must not self-recommend (see CHEAP_ALTERNATIVES).
     "deepseek-reasoner",
     # Cohere
     "command-r-plus",
@@ -96,6 +96,7 @@ EXCLUDE_PREFIXES = (
     "gpt-5-mini",
     "gpt-5-nano",
     "gpt-4o-mini",
+    "deepseek-chat",  # already the cheap DeepSeek tier
 )
 
 # Maps each frontier model family to its recommended cheap alternative. The
@@ -117,7 +118,6 @@ CHEAP_ALTERNATIVES: dict[str, str] = {
     "gemini-2.0-pro": "gemini-2.5-flash",
     # DeepSeek — chat (V3) is materially cheaper than reasoner (R1)
     "deepseek-reasoner": "deepseek-chat",
-    "deepseek-chat": "deepseek-chat",
     # Cohere — command-r is the smaller variant
     "command-r-plus": "command-r",
     "command-a": "command-r",

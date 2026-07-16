@@ -137,7 +137,8 @@ def wrap_openai(client: Any, sentinel: Sentinel) -> Any:
     of audio just like Deepgram. The audio paths are ADDITIVE: the existing
     chat/embeddings instrumentation is unchanged.
     """
-    _patch_chat_completions(client, sentinel)
+    base_url = _client_base_url(client)
+    _patch_chat_completions(client, sentinel, base_url=base_url)
     _patch_embeddings(client, sentinel)
     # Whisper paths. Defensive: ``client.audio`` may not be present on
     # older openai SDK versions (<1.0) or on trimmed mocks. Silent skip
@@ -192,6 +193,7 @@ class _OpenAIUsageAccumulator:
         # and the wrapper has no token information. We surface this in
         # ``raw_response_meta`` so customers can detect/dashboard the gap.
         self.usage_unavailable: bool = True
+        self.cache_read_tokens: int = 0
         # Pending tool blocks keyed by ``index``. Each entry:
         #     {"name": str, "arguments_str": str}
         # The name typically arrives on the first delta for that index; the
@@ -256,6 +258,11 @@ class _OpenAIUsageAccumulator:
         completion = getattr(usage, "completion_tokens", None)
         if isinstance(completion, int):
             self.output_tokens = max(self.output_tokens, completion)
+        from token_sentinel.pricing import extract_openai_cache_read
+
+        cache_read = extract_openai_cache_read(usage)
+        if cache_read:
+            self.cache_read_tokens = max(self.cache_read_tokens, cache_read)
 
     @property
     def tool_calls(self) -> list[dict[str, Any]]:
@@ -495,7 +502,9 @@ class _AsyncOpenAIStreamProxy:
 # ---------------------------------------------------------------------------
 
 
-def _patch_chat_completions(client: Any, sentinel: Sentinel) -> None:
+def _patch_chat_completions(
+    client: Any, sentinel: Sentinel, *, base_url: str | None = None
+) -> None:
     original_create = client.chat.completions.create
 
     if inspect.iscoroutinefunction(original_create):
@@ -511,6 +520,7 @@ def _patch_chat_completions(client: Any, sentinel: Sentinel) -> None:
                     session_id=session_id,
                     args=args,
                     kwargs=kwargs,
+                    base_url=base_url,
                 )
 
             start = time.perf_counter()
@@ -525,6 +535,7 @@ def _patch_chat_completions(client: Any, sentinel: Sentinel) -> None:
                     kwargs=kwargs,
                     response=response,
                     latency_ms=elapsed_ms,
+                    base_url=base_url,
                 )
             except Exception:
                 return response
@@ -551,6 +562,7 @@ def _patch_chat_completions(client: Any, sentinel: Sentinel) -> None:
                 session_id=session_id,
                 args=args,
                 kwargs=kwargs,
+                base_url=base_url,
             )
 
         start = time.perf_counter()
@@ -565,6 +577,7 @@ def _patch_chat_completions(client: Any, sentinel: Sentinel) -> None:
                 kwargs=kwargs,
                 response=response,
                 latency_ms=elapsed_ms,
+                base_url=base_url,
             )
         except Exception:
             return response
@@ -587,6 +600,7 @@ def _instrumented_sync_stream(
     session_id: str,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
+    base_url: str | None = None,
 ) -> Any:
     """Construct a sync streaming proxy. Falls back to passthrough + warn
     (under block mode) if proxy construction fails for any reason."""
@@ -606,6 +620,7 @@ def _instrumented_sync_stream(
                 kwargs=captured_kwargs,
                 accumulator=acc,
                 latency_ms=elapsed_ms,
+                base_url=base_url,
             )
         except Exception:
             return
@@ -637,6 +652,7 @@ async def _instrumented_async_stream(
     session_id: str,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
+    base_url: str | None = None,
 ) -> Any:
     """Construct an async streaming proxy. Falls back to passthrough + warn
     (under block mode) if proxy construction fails for any reason."""
@@ -656,6 +672,7 @@ async def _instrumented_async_stream(
                 kwargs=captured_kwargs,
                 accumulator=acc,
                 latency_ms=elapsed_ms,
+                base_url=base_url,
             )
         except Exception:
             return
@@ -739,12 +756,30 @@ def _patch_embeddings(client: Any, sentinel: Sentinel) -> None:
     client.embeddings.create = instrumented_embed
 
 
+def _client_base_url(client: Any) -> str | None:
+    """Best-effort ``base_url`` from an OpenAI client for gateway model matching.
+
+    Used by ``model_misroute`` so ``openai/gpt-4o``-style names can be
+    normalized when traffic goes through OpenRouter / Portkey / etc.
+    """
+    try:
+        value = getattr(client, "base_url", None)
+        if value is None:
+            return None
+        # httpx URL objects stringify to the full base URL.
+        text = str(value).strip()
+        return text or None
+    except Exception:
+        return None
+
+
 def _build_chat_record(
     *,
     session_id: str,
     kwargs: dict[str, Any],
     response: Any,
     latency_ms: float,
+    base_url: str | None = None,
 ) -> CallRecord:
     model = kwargs.get("model", "unknown")
     messages = kwargs.get("messages", [])
@@ -767,6 +802,13 @@ def _build_chat_record(
     usage = getattr(response, "usage", None)
     prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
     completion_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
+
+    from token_sentinel.pricing import extract_openai_cache_read
+
+    usage_extra: dict[str, Any] = {}
+    cache_read = extract_openai_cache_read(usage)
+    if cache_read:
+        usage_extra["cache_read_tokens"] = cache_read
 
     tool_calls: list[dict[str, Any]] = []
     has_text_output = False
@@ -800,6 +842,14 @@ def _build_chat_record(
     if choices:
         finish_reason = getattr(choices[0], "finish_reason", None)
 
+    raw_request: dict[str, Any] = {
+        "messages": messages,
+        "tools": tools,
+        "max_tokens": max_tokens,
+    }
+    if base_url:
+        raw_request["base_url"] = base_url
+
     return CallRecord(
         session_id=session_id,
         timestamp=datetime.now(timezone.utc),
@@ -812,8 +862,9 @@ def _build_chat_record(
         request_hash=request_hash,
         tool_calls=tool_calls,
         user_facing_output=user_facing_output,
-        raw_request={"messages": messages, "tools": tools, "max_tokens": max_tokens},
+        raw_request=raw_request,
         raw_response_meta={"finish_reason": finish_reason},
+        usage_extra=usage_extra,
     )
 
 
@@ -823,6 +874,7 @@ def _build_record_from_accumulator(
     kwargs: dict[str, Any],
     accumulator: _OpenAIUsageAccumulator,
     latency_ms: float,
+    base_url: str | None = None,
 ) -> CallRecord:
     """Build a CallRecord from a streamed chat completion accumulator.
 
@@ -853,6 +905,18 @@ def _build_record_from_accumulator(
     tool_calls = accumulator.tool_calls
     user_facing_output = accumulator.has_text_output and not tool_calls
 
+    raw_request: dict[str, Any] = {
+        "messages": messages,
+        "tools": tools,
+        "max_tokens": max_tokens,
+    }
+    if base_url:
+        raw_request["base_url"] = base_url
+
+    usage_extra: dict[str, Any] = {}
+    if accumulator.cache_read_tokens:
+        usage_extra["cache_read_tokens"] = accumulator.cache_read_tokens
+
     return CallRecord(
         session_id=session_id,
         timestamp=datetime.now(timezone.utc),
@@ -865,12 +929,13 @@ def _build_record_from_accumulator(
         request_hash=request_hash,
         tool_calls=tool_calls,
         user_facing_output=user_facing_output,
-        raw_request={"messages": messages, "tools": tools, "max_tokens": max_tokens},
+        raw_request=raw_request,
         raw_response_meta={
             "finish_reason": accumulator.finish_reason,
             "streamed": True,
             "usage_unavailable": accumulator.usage_unavailable,
         },
+        usage_extra=usage_extra,
     )
 
 

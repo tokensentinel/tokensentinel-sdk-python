@@ -1,5 +1,8 @@
 # Leak taxonomy
 
+> **Documented for Python SDK `token-sentinel` 1.0.3.**
+
+
 The **fifteen** waste classes detected by the current SDK. Each entry: definition, signal, default thresholds, false-positive hazards, example, and remediation.
 
 Rules 1–8 are the original chat/agent set. Rules 9–15 cover vision, audio, voice, rerank, and conversational repair.

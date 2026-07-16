@@ -1,8 +1,11 @@
 # Leak rules
 
+> **Documented for Python SDK `token-sentinel` 1.0.3.**
+
+
 TokenSentinel ships **fifteen** deterministic waste detection rules. Each is a pure function of the in-process per-session ring buffer plus your config — no I/O, no network calls, sub-millisecond p95 per rule.
 
-This page is the user-facing reference: what each rule detects, when it fires, default thresholds, how to tune, and a sample event payload. For the design rationale and false-positive analysis, see [`docs/waste-taxonomy.md`](../waste-taxonomy.md).
+This page is the user-facing reference: what each rule detects, when it fires, default thresholds, how to tune, and a sample event payload. For the design rationale and false-positive analysis, see [Waste taxonomy](../waste-taxonomy.md).
 
 **Timing.** Rules run **after** each wrapped provider call returns. The call that just completed is already billed; detection is meant to stop wasteful *subsequent* turns (especially with `mode="block"` or a handler that aborts the agent loop).
 
@@ -26,7 +29,7 @@ This page is the user-facing reference: what each rule detects, when it fires, d
 | [`rerank_thrash`](#14-rerank_thrash) | 0.75–0.9 | Identical Cohere rerank requests repeated in a window. |
 | [`repair_loop`](#15-repair_loop) | 0.65–0.9 | User corrections + near-identical agent regenerations. |
 
-All rules emit a [`LeakEvent`](./07-api-reference.md#leakevent) with the same shape. The `evidence` dict is rule-specific.
+All rules emit a [`LeakEvent`](./07-api-reference.md#leakevent--wasteevent) with the same shape. The `evidence` dict is rule-specific.
 
 Tune any rule's thresholds via the project `config` dict. The pattern is:
 
@@ -78,7 +81,13 @@ Sentinel(
 )
 ```
 
-If you have an agent that legitimately calls a polling tool (`check_status` until ready) and `tool_loop` is firing on it, the cleanest fix is to disable `tool_loop` for that project entirely and rely on `retry_storm` (which is exact-hash, not similarity-based) or wait until V1 lands per-tool allow-lists.
+Polling tools such as `check_status` / `get_status` / `poll` are **skipped by default** (`tool_loop.polling_tools`). Override the list to add or clear names:
+
+```python
+config={"tool_loop.polling_tools": ("check_status", "my_poller")}  # or () to disable allow-list
+```
+
+Monotonic pagination (`page` / similar numeric fields that only increment) is also suppressed automatically.
 
 **Sample event.**
 
@@ -247,9 +256,14 @@ Sentinel(
 )
 ```
 
-For long-running legitimate background agents (overnight research), raise `threshold_minutes` substantially or disable the rule for those projects. Note: `Sentinel.mark_long_running(session_id)` is documented in older taxonomy notes but is **not implemented** yet.
+For long-running legitimate background agents (overnight research), either raise `threshold_minutes`, disable the rule, or call:
 
-**Coverage gap.** If the session never sets `user_facing_output=True` on any call, this rule does not fire (it needs a prior user-facing anchor). Tool-only stuck agents fall into that gap.
+```python
+sentinel.mark_long_running(session_id)   # zombie opt-out for this session
+sentinel.unmark_long_running(session_id)  # optional clear
+```
+
+**Never user-facing.** If the session never sets `user_facing_output=True`, the rule still fires when the session has been active long enough (anchor = first call in the buffer) and enough recent calls continue — pure tool-only stuck agents are covered.
 
 **Sample event.**
 
@@ -715,10 +729,10 @@ This asymmetry is why the defaults err toward fewer false positives at the cost 
 
 ## Known limitations (current SDK)
 
-- **Post-call only.** Rules and `mode="block"` cannot un-bill the call that just finished.
-- **Zombie requires a prior user-facing turn.** Sessions that *never* set `user_facing_output=True` do not fire `zombie` today (tool-only stuck agents need a different signal or a future rule change).
-- **Documented but not yet implemented mitigations:** `polling_tools` allow-lists, monotonic page suppression for `tool_loop`, and `Sentinel.mark_long_running(session_id)` for zombie opt-out. Until those land, disable or re-threshold the rule for those projects.
-- **Optional extras:** perceptual vision (`[vision-perceptual]`), audio metadata for Whisper duration (`[audio-metadata]`). Without them, related paths degrade gracefully.
+- **Post-call only.** Rules and `mode="block"` cannot un-bill the call that just finished. (Cloud policy budgets/kill-switch use the same boundary when configured.)
+- **`estimated_burn` is approximate.** Model-aware rates + cache-read discount (1.0.3+); unknown models use a flat fallback. Not an invoice — see [Cost estimates](./07-api-reference.md#cost-estimates-estimated_burn).
+- **Optional extras:** perceptual vision (`[vision-perceptual]`), audio metadata for Whisper duration (`[audio-metadata]`), token fill when usage missing (`[tiktoken]`). Without them, related paths degrade gracefully.
+- **Sentence-transformers** for `tool_loop` remains optional/future — default is pure TF-IDF char-n-grams. Polling-tool allow-lists and monotonic pagination suppressors for `tool_loop` **are** shipped.
 
 ## Cloud-side roadmap
 
@@ -726,9 +740,8 @@ Optional TokenSentinel Cloud can run LLM-as-judge ratification on gray-zone conf
 
 Also planned / partial on the roadmap:
 
-- Semantic similarity for `tool_loop` (sentence-transformers via `[embeddings]` extra — extra exists; rule path not fully wired as of 1.0.0).
+- Semantic similarity for `tool_loop` (sentence-transformers via `[embeddings]` extra — extra exists; rule path not fully wired as of 1.0.3).
 - Per-rule mode (e.g., `block` only on `embedding_waste`).
-- Polling-tool allow-lists and pagination suppressors for `tool_loop`.
 - Context-token-entropy refinement for `context_bloat`.
 
 Until those land, tune thresholds and use rule disable lists to manage noise.

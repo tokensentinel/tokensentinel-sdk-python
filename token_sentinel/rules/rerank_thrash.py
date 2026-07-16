@@ -84,6 +84,7 @@ from collections import defaultdict
 
 from token_sentinel.events import CallRecord, LeakEvent
 from token_sentinel.rules.base import Rule
+from token_sentinel.rules.timeutil import elapsed_seconds
 
 # Approximate Cohere price per rerank search-unit for May 2026
 # rerank-english-v3.0. One search-unit covers (1 query + up to 100
@@ -119,7 +120,7 @@ class RerankThrashRule(Rule):
                 continue
             if c.method != "rerank":
                 continue
-            if (now - c.timestamp).total_seconds() > window:
+            if elapsed_seconds(now, c.timestamp) > window:
                 continue
             if not isinstance(c.request_hash, str) or not c.request_hash:
                 continue
@@ -145,7 +146,7 @@ class RerankThrashRule(Rule):
 
             # Time span: oldest-to-newest in the cluster, rounded to 0.1s.
             timestamps = sorted(c.timestamp for c in group)
-            time_span_seconds = round((timestamps[-1] - timestamps[0]).total_seconds(), 1)
+            time_span_seconds = round(elapsed_seconds(timestamps[-1], timestamps[0]), 1)
 
             # Burn estimate: every call after the first is wasted. One
             # search-unit per call (Cohere bills the unit, not the doc

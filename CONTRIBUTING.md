@@ -109,4 +109,4 @@ When contributing code, comments, or documentation:
 
 ## Need Help?
 
-For questions, bug reports, or feature requests, please open an issue in the GitHub repository or reach out to us at [shakyasmreta@gmail.com](mailto:shakyasmreta@gmail.com).
+For questions, bug reports, or feature requests, please open an issue in the GitHub repository or email [support@tokensentinel.dev](mailto:support@tokensentinel.dev).
