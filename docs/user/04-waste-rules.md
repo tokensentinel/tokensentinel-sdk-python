@@ -1,11 +1,11 @@
 # Leak rules
 
-> **Documented for Python SDK `token-sentinel` 1.0.2.**
+> **Documented for Python SDK `token-sentinel` 1.0.3.**
 
 
 TokenSentinel ships **fifteen** deterministic waste detection rules. Each is a pure function of the in-process per-session ring buffer plus your config — no I/O, no network calls, sub-millisecond p95 per rule.
 
-This page is the user-facing reference: what each rule detects, when it fires, default thresholds, how to tune, and a sample event payload. For the design rationale and false-positive analysis, see [`docs/waste-taxonomy.md`](../waste-taxonomy.md).
+This page is the user-facing reference: what each rule detects, when it fires, default thresholds, how to tune, and a sample event payload. For the design rationale and false-positive analysis, see [Waste taxonomy](../waste-taxonomy.md).
 
 **Timing.** Rules run **after** each wrapped provider call returns. The call that just completed is already billed; detection is meant to stop wasteful *subsequent* turns (especially with `mode="block"` or a handler that aborts the agent loop).
 
@@ -730,8 +730,9 @@ This asymmetry is why the defaults err toward fewer false positives at the cost 
 ## Known limitations (current SDK)
 
 - **Post-call only.** Rules and `mode="block"` cannot un-bill the call that just finished. (Cloud policy budgets/kill-switch use the same boundary when configured.)
-- **Optional extras:** perceptual vision (`[vision-perceptual]`), audio metadata for Whisper duration (`[audio-metadata]`). Without them, related paths degrade gracefully.
-- **Sentence-transformers** for `tool_loop` remains optional/future — default is pure TF-IDF char-n-grams.
+- **`estimated_burn` is approximate.** Model-aware rates + cache-read discount (1.0.3+); unknown models use a flat fallback. Not an invoice — see [Cost estimates](./07-api-reference.md#cost-estimates-estimated_burn).
+- **Optional extras:** perceptual vision (`[vision-perceptual]`), audio metadata for Whisper duration (`[audio-metadata]`), token fill when usage missing (`[tiktoken]`). Without them, related paths degrade gracefully.
+- **Sentence-transformers** for `tool_loop` remains optional/future — default is pure TF-IDF char-n-grams. Polling-tool allow-lists and monotonic pagination suppressors for `tool_loop` **are** shipped.
 
 ## Cloud-side roadmap
 
@@ -739,9 +740,8 @@ Optional TokenSentinel Cloud can run LLM-as-judge ratification on gray-zone conf
 
 Also planned / partial on the roadmap:
 
-- Semantic similarity for `tool_loop` (sentence-transformers via `[embeddings]` extra — extra exists; rule path not fully wired as of 1.0.2).
+- Semantic similarity for `tool_loop` (sentence-transformers via `[embeddings]` extra — extra exists; rule path not fully wired as of 1.0.3).
 - Per-rule mode (e.g., `block` only on `embedding_waste`).
-- Polling-tool allow-lists and pagination suppressors for `tool_loop`.
 - Context-token-entropy refinement for `context_bloat`.
 
 Until those land, tune thresholds and use rule disable lists to manage noise.

@@ -1,6 +1,6 @@
 # Installation
 
-> **Documented for Python SDK `token-sentinel` 1.0.2** (PyPI package name: `token-sentinel`).
+> **Documented for Python SDK `token-sentinel` 1.0.3** (PyPI package name: `token-sentinel`).
 
 TokenSentinel is published to PyPI as `token-sentinel`. The **core package has zero runtime dependencies** — provider SDKs and optional features are pulled in via extras so you only install what you use.
 
@@ -14,7 +14,7 @@ TokenSentinel requires **Python 3.10 or later**. It is tested on 3.10, 3.11, and
 pip install token-sentinel
 ```
 
-The core package gives you `Sentinel`, the 15 in-process waste rules, the tracer, and the public types (`CallRecord`, `LeakEvent` / `WasteEvent`, `LeakDetected` / `WasteDetected`, plus the optional policy exceptions). It will not instrument any provider client on its own — for that you need at least one provider extra below.
+The core package gives you `Sentinel`, the 15 in-process waste rules, the tracer, model-aware burn helpers (`estimate_usd`, `ModelRate`, …), and the public types (`CallRecord`, `LeakEvent` / `WasteEvent`, `LeakDetected` / `WasteDetected`, plus the optional policy exceptions). It will not instrument any provider client on its own — for that you need at least one provider extra below.
 
 ## Provider extras
 
@@ -49,15 +49,17 @@ The `[openai]` extra is enough for every OpenAI-compatible chat/embeddings endpo
 
 | Extra | Pulls in | Use when |
 |---|---|---|
+| `[tiktoken]` | `tiktoken` | Optional local token counts when a provider omits usage (e.g. OpenAI streams without `stream_options.include_usage`). Improves burn estimates only — not required for rules |
 | `[embeddings]` | `sentence-transformers`, `numpy` | Reserved for future semantic similarity on `tool_loop` / `retrieval_thrash`. **Not required today** — rules use pure-Python TF-IDF char-n-grams |
 | `[vision-perceptual]` | `imagehash`, `Pillow` | Perceptual-hash fallback for `vision_re_upload` (catches re-uploads after resize/recompress) |
 | `[audio-metadata]` | `mutagen` | Better audio-duration probing for Whisper streaming paths |
 | `[langchain]` | `langchain-core` | `TokenSentinelCallbackHandler` enricher |
 | `[otel]` | OpenTelemetry API/SDK | `TokenSentinelSpanProcessor` for CrewAI / AutoGen / Pydantic AI (and any `gen_ai.*` spans) |
-| `[all]` | Everything above | Convenience meta-extra for multi-provider apps and full feature set |
+| `[all]` | Everything above (including `tiktoken`) | Convenience meta-extra for multi-provider apps and full feature set |
 | `[dev]` | `pytest`, `ruff`, `mypy`, … | Contributing to the SDK itself |
 
 ```bash
+pip install token-sentinel[tiktoken]
 pip install token-sentinel[vision-perceptual]
 pip install token-sentinel[langchain]
 pip install token-sentinel[all]
@@ -69,7 +71,7 @@ pip install token-sentinel[all]
 python -c "from token_sentinel import Sentinel, __version__; print(__version__, Sentinel.__module__)"
 ```
 
-Expected output starts with `1.0.2` (or your installed version) and `token_sentinel.sentinel`.
+Expected output starts with `1.0.3` (or your installed version) and `token_sentinel.sentinel`.
 
 To verify a provider extra and wrapper dispatch (no real network call required for wrap itself):
 
@@ -94,7 +96,7 @@ Each line should print `<provider> ok`. If you see `Unsupported client type`, th
 | Path | What you get | Cost |
 |---|---|---|
 | **SDK only** (this package) | All 15 rules, all wrappers, `log` / `alert` / `block`, zero phoning home | Free (Apache-2.0) |
-| **TokenSentinel Cloud** (proprietary) | Hosted dashboards, retention, webhooks, Intervention Pack (budgets / velocity / kill-switch), Pro judge + drift + composites | Paid tiers — see [tokensentinel.dev](https://tokensentinel.dev) |
+| **TokenSentinel Cloud** (Proprietary) | Hosted dashboards, retention, webhooks, Intervention Pack (budgets / velocity / kill-switch), Pro judge + drift + composites | Paid tiers — see [tokensentinel.dev](https://tokensentinel.dev) |
 
 Nothing leaves the process unless you set **both** `cloud_endpoint=` and `api_key=` on `Sentinel(...)`. The SDK is fully functional without cloud.
 

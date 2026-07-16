@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from token_sentinel.events import CallRecord, LeakEvent
 from token_sentinel.rules.base import Rule
 from token_sentinel.rules.timeutil import elapsed_seconds
@@ -51,7 +53,7 @@ class ZombieRule(Rule):
         if recent_calls < min_recent_calls:
             return None
 
-        evidence: dict = {
+        evidence: dict[str, Any] = {
             "minutes_since_user_facing_output": round(elapsed_sec / 60.0, 1),
             "recent_calls": recent_calls,
         }

@@ -1,6 +1,6 @@
 # Architecture
 
-> **Documented for Python SDK `token-sentinel` 1.0.2.**
+> **Documented for Python SDK `token-sentinel` 1.0.3.**
 
 ## Design principles
 
@@ -41,6 +41,12 @@ policy raises) therefore act **after** the current call has already been
 billed. The savings come from halting the *next* call in a wasteful loop,
 not from preventing the call that just completed.
 
+**Burn estimates (1.0.3+).** `LeakEvent.estimated_burn` and policy budget
+projection use `token_sentinel.pricing` — a static per-model rate table
+(input vs output, optional cache-read discount) with a flat fallback for
+unknown models. Optional `[tiktoken]` can fill missing token counts when
+provider usage is absent. Rates are FinOps signals, not invoices.
+
 ## Components
 
 ### Wrapper layer (`token_sentinel/wrappers/`)
@@ -66,7 +72,7 @@ not from preventing the call that just completed.
 ### Event bus (`Sentinel._run_handlers`)
 
 - Sync callback (registered with `@sentinel.on_leak`). Multiple handlers run in registration order.
-- Handlers run synchronously in the wrapped call's thread *after* the underlying API response has been received. For async work (network calls, queue dispatch), enqueue inside the handler and let a separate worker drain the queue — see [docs/user/03-modes.md](user/03-modes.md#handler-requirements) for the safe pattern.
+- Handlers run synchronously in the wrapped call's thread *after* the underlying API response has been received. For async work (network calls, queue dispatch), enqueue inside the handler and let a separate worker drain the queue — see [Modes — handler requirements](./user/03-modes.md#handler-requirements) for the safe pattern.
 - Handlers wrapped in try/except — a buggy handler can never kill the agent. `BaseException` (`KeyboardInterrupt`, `SystemExit`) still propagates.
 
 ### Cloud sink (optional, v0.4+)

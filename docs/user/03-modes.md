@@ -1,6 +1,6 @@
 # Modes
 
-> **Documented for Python SDK `token-sentinel` 1.0.2.**
+> **Documented for Python SDK `token-sentinel` 1.0.3.**
 
 
 TokenSentinel has three modes that control what happens when a rule fires: `log`, `alert`, and `block`. Pick the one that matches how much you trust the rules to be right.

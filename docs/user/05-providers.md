@@ -1,6 +1,6 @@
 # Providers
 
-> **Documented for Python SDK `token-sentinel` 1.0.2.**
+> **Documented for Python SDK `token-sentinel` 1.0.3.**
 
 
 TokenSentinel ships first-class wrappers for nine native provider families and works transparently with any OpenAI-compatible chat/embeddings endpoint. This page is the canonical matrix for the open-source SDK.
@@ -82,6 +82,7 @@ Streaming is fully instrumented. The wrapper returns a proxy iterator that accum
 | Anyscale | `https://api.endpoints.anyscale.com/v1` |
 | Mistral La Plateforme | `https://api.mistral.ai/v1` |
 | Perplexity | `https://api.perplexity.ai` |
+| xAI Grok | `https://api.x.ai/v1` |
 | vLLM / Ollama / TGI / LM Studio / LocalAI | your server `/v1` |
 
 ```python
@@ -90,7 +91,7 @@ client = sentinel.wrap(
 )
 ```
 
-`CallRecord.provider` stays `"openai"`; the real model id is in `record.model`. For self-hosted, treat `estimated_burn` as a quality signal, not a billing number.
+`CallRecord.provider` stays `"openai"`; the real model id is in `record.model` (and drives model-aware burn estimates when the id matches the pricing table). For self-hosted, treat `estimated_burn` as a relative quality signal, not a GPU invoice.
 
 ### Google Gemini (and Vertex)
 
@@ -243,6 +244,6 @@ For custom stacks, build a `CallRecord` and call `sentinel.record_call(...)` (se
 
 ## Optional cloud (paid)
 
-Wrapping and rules never require cloud. If you configure `cloud_endpoint` + `api_key`, events are batched to the closed-source TokenSentinel Cloud for dashboards, retention, webhooks, and (on Team+) policy enforcement. Details and pricing live on [tokensentinel.dev](https://tokensentinel.dev) — not in this open-source package.
+Wrapping and rules never require cloud. If you configure `cloud_endpoint` + `api_key`, events are batched to the Proprietary TokenSentinel Cloud for dashboards, retention, webhooks, and (on Team+) policy enforcement. Details and pricing live on [tokensentinel.dev](https://tokensentinel.dev) — not in this open-source package.
 
 Next: [Integrations](./06-integrations.md) for MCP, RAG, LangChain, and OTel.

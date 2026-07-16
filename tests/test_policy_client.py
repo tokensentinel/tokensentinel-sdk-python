@@ -649,7 +649,13 @@ def test_budget_exceeded_raises_when_burn_would_exceed_cap(sentinel_with_policy,
 
     # First call: 1000 prompt + 200 completion = 1200 tokens × $9e-6 = $0.0108
     # which already exceeds the $0.01 cap → should raise on first attempt.
-    call = make_call(session_id="s-budget", prompt_tokens=1000, completion_tokens=200)
+    # Use an unknown model so burn uses the flat FALLBACK rate (deterministic).
+    call = make_call(
+        session_id="s-budget",
+        prompt_tokens=1000,
+        completion_tokens=200,
+        model="unknown-flat-rate-model",
+    )
     with pytest.raises(BudgetExceeded) as exc_info:
         s.record_call(call)
     err = exc_info.value
@@ -665,11 +671,21 @@ def test_budget_check_accounts_for_running_aggregate(sentinel_with_policy, make_
     second call must raise."""
     s = sentinel_with_policy
     # 100 tokens × $9e-6 = $0.0009 per call. Cap at $0.0015 so two calls
-    # exceed the cap.
+    # exceed the cap. Unknown model → flat fallback rate.
     _set_policy_directly(s, budget_usd_per_session=0.0015)
 
-    call1 = make_call(session_id="s-acc", prompt_tokens=100, completion_tokens=0)
-    call2 = make_call(session_id="s-acc", prompt_tokens=100, completion_tokens=0)
+    call1 = make_call(
+        session_id="s-acc",
+        prompt_tokens=100,
+        completion_tokens=0,
+        model="unknown-flat-rate-model",
+    )
+    call2 = make_call(
+        session_id="s-acc",
+        prompt_tokens=100,
+        completion_tokens=0,
+        model="unknown-flat-rate-model",
+    )
     # First call passes through.
     s.record_call(call1)
     # Second call would push aggregate to ~$0.0018 > cap.
@@ -722,16 +738,17 @@ def test_multiple_sessions_track_burn_independently(sentinel_with_policy, make_c
     record_call from running."""
     s = sentinel_with_policy
     # 100 tokens × $9e-6 = $0.0009/call. Cap = $0.001 means 1 call passes,
-    # 2 calls per session exceed.
+    # 2 calls per session exceed. Unknown model → flat fallback rate.
     _set_policy_directly(s, budget_usd_per_session=0.001)
+    m = "unknown-flat-rate-model"
 
     # Session A burns one call (under cap).
-    s.record_call(make_call(session_id="A", prompt_tokens=100, completion_tokens=0))
+    s.record_call(make_call(session_id="A", prompt_tokens=100, completion_tokens=0, model=m))
     # Session A burns another call → exceeds.
     with pytest.raises(BudgetExceeded):
-        s.record_call(make_call(session_id="A", prompt_tokens=100, completion_tokens=0))
+        s.record_call(make_call(session_id="A", prompt_tokens=100, completion_tokens=0, model=m))
     # Session B starts fresh: one call still passes.
-    s.record_call(make_call(session_id="B", prompt_tokens=100, completion_tokens=0))
+    s.record_call(make_call(session_id="B", prompt_tokens=100, completion_tokens=0, model=m))
 
 
 # ---------------------------------------------------------------------------
@@ -854,20 +871,28 @@ def test_concurrent_record_call_aggregates_burn_correctly(sentinel_with_policy, 
     _set_policy_directly(s, budget_usd_per_session=1000.0)
 
     # Each call: 100 tokens × $9e-6 = $0.0009. 8 threads × 10 calls = 80
-    # calls × $0.0009 = $0.072.
+    # calls × $0.0009 = $0.072. Unknown model → flat fallback rate.
     sid = "s-concurrent"
     threads_count = 8
     calls_per_thread = 10
     total_calls = threads_count * calls_per_thread
     expected_burn_per_call = 100 * 9e-6
     expected_total = total_calls * expected_burn_per_call
+    m = "unknown-flat-rate-model"
 
     barrier = threading.Barrier(threads_count)
 
     def worker():
         barrier.wait()  # release together for max contention
         for _ in range(calls_per_thread):
-            s.record_call(make_call(session_id=sid, prompt_tokens=100, completion_tokens=0))
+            s.record_call(
+                make_call(
+                    session_id=sid,
+                    prompt_tokens=100,
+                    completion_tokens=0,
+                    model=m,
+                )
+            )
 
     threads = [threading.Thread(target=worker) for _ in range(threads_count)]
     for t in threads:

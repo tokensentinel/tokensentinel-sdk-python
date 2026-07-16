@@ -2,6 +2,17 @@
 
 All notable changes to the TokenSentinel Python SDK are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] — 2026-07-17
+
+### Added
+- **Model-aware USD burn estimates** (`token_sentinel.pricing`) — per-model input/output rates for major Anthropic, OpenAI, Gemini, DeepSeek, Cohere, and Mistral families; unknown models keep the historical flat fallback. Public helpers: `estimate_usd`, `estimate_call_usd`, `ModelRate`, `default_pricing_table`. Optional `Sentinel(pricing_table=...)` override.
+- **Prompt-cache awareness** — OpenAI `prompt_tokens_details.cached_tokens` and Anthropic `cache_read_input_tokens` are stored on `CallRecord.usage_extra["cache_read_tokens"]` and billed at a discounted cache-read rate in burn estimates.
+- **Optional tiktoken fallback** — `pip install token-sentinel[tiktoken]`. When both token counts are zero, `record_call` may estimate prompt tokens from `raw_request["messages"]` and stamp `usage_extra["tokens_estimated"]=True`.
+
+### Changed
+- Rule config example (`tool_loop.min_calls`), no Pro-tier composite / long cloud sales matrix.
+- Policy budget projection and rule burn helpers (`tool_loop` / retrieval thrash) use the shared model-aware estimator.
+
 ## [1.0.2] — 2026-07-14
 
 ### Changed

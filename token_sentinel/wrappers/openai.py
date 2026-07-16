@@ -193,6 +193,7 @@ class _OpenAIUsageAccumulator:
         # and the wrapper has no token information. We surface this in
         # ``raw_response_meta`` so customers can detect/dashboard the gap.
         self.usage_unavailable: bool = True
+        self.cache_read_tokens: int = 0
         # Pending tool blocks keyed by ``index``. Each entry:
         #     {"name": str, "arguments_str": str}
         # The name typically arrives on the first delta for that index; the
@@ -257,6 +258,11 @@ class _OpenAIUsageAccumulator:
         completion = getattr(usage, "completion_tokens", None)
         if isinstance(completion, int):
             self.output_tokens = max(self.output_tokens, completion)
+        from token_sentinel.pricing import extract_openai_cache_read
+
+        cache_read = extract_openai_cache_read(usage)
+        if cache_read:
+            self.cache_read_tokens = max(self.cache_read_tokens, cache_read)
 
     @property
     def tool_calls(self) -> list[dict[str, Any]]:
@@ -797,6 +803,13 @@ def _build_chat_record(
     prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
     completion_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
 
+    from token_sentinel.pricing import extract_openai_cache_read
+
+    usage_extra: dict[str, Any] = {}
+    cache_read = extract_openai_cache_read(usage)
+    if cache_read:
+        usage_extra["cache_read_tokens"] = cache_read
+
     tool_calls: list[dict[str, Any]] = []
     has_text_output = False
 
@@ -851,6 +864,7 @@ def _build_chat_record(
         user_facing_output=user_facing_output,
         raw_request=raw_request,
         raw_response_meta={"finish_reason": finish_reason},
+        usage_extra=usage_extra,
     )
 
 
@@ -899,6 +913,10 @@ def _build_record_from_accumulator(
     if base_url:
         raw_request["base_url"] = base_url
 
+    usage_extra: dict[str, Any] = {}
+    if accumulator.cache_read_tokens:
+        usage_extra["cache_read_tokens"] = accumulator.cache_read_tokens
+
     return CallRecord(
         session_id=session_id,
         timestamp=datetime.now(timezone.utc),
@@ -917,6 +935,7 @@ def _build_record_from_accumulator(
             "streamed": True,
             "usage_unavailable": accumulator.usage_unavailable,
         },
+        usage_extra=usage_extra,
     )
 
 

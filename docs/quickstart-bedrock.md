@@ -1,6 +1,6 @@
 # Quickstart — AWS Bedrock
 
-> **Documented for Python SDK `token-sentinel` 1.0.2.**
+> **Documented for Python SDK `token-sentinel` 1.0.3.**
 
 
 A 5-minute end-to-end: install, wrap, see a leak fire.
@@ -94,7 +94,7 @@ The handler receives a `LeakEvent` dataclass with these fields:
 | `session_id` | str | Identifies a single agent run |
 | `rule` | str | Which rule fired (e.g. `v0.model_misroute`) |
 | `evidence` | dict | Rule-specific payload — keys documented per rule |
-| `estimated_burn` | float | Rough dollar figure for the wasted spend this leak represents |
+| `estimated_burn` | float | Approximate USD (model-aware as of 1.0.3); FinOps signal, not an invoice |
 | `suggested_action` | str | Machine-readable hint |
 | `raised_at` | datetime | UTC timestamp |
 | `metadata` | dict | Cloud-side judge verdict trail when ratification fires (Pro tier) |
@@ -161,7 +161,7 @@ For async Bedrock you have two options:
   )
   ```
 - For hard intervention, set `mode="block"` to raise `LeakDetected` at the next call boundary. Wrap calls in `try / except LeakDetected as exc:` and inspect `exc.event`.
-- Pair with the cloud (Team / Pro) — see [`docs/pricing.md`](pricing.md). Pro adds the Intervention Pack which raises `BudgetExceeded` / `VelocityExceeded` / `KillSwitchActive` regardless of mode.
+- Pair with the cloud (Team / Pro) — see [Pricing](https://tokensentinel.dev). Pro adds the Intervention Pack which raises `BudgetExceeded` / `VelocityExceeded` / `KillSwitchActive` regardless of mode.
 - Long-running agents: call `sentinel.close(timeout=5.0)` before exit to flush the cloud sink and stop the policy poller daemon thread.
 
 ### Regional considerations

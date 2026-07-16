@@ -1,6 +1,6 @@
 # API reference
 
-> **Documented for Python SDK `token-sentinel` 1.0.2.**  
+> **Documented for Python SDK `token-sentinel` 1.0.3.**  
 > Runtime version: `import token_sentinel; token_sentinel.__version__`
 
 Public surface exported from `token_sentinel` (stable, semver-tracked):
@@ -16,11 +16,15 @@ from token_sentinel import (
     BudgetExceeded,
     VelocityExceeded,
     KillSwitchActive,
+    ModelRate,
+    estimate_usd,
+    estimate_call_usd,
+    default_pricing_table,
     __version__,
 )
 ```
 
-Everything under `token_sentinel.tracer`, `token_sentinel.rules.*`, and `token_sentinel.wrappers.*` is internal — pin a minor version if you import those.
+Everything under `token_sentinel.tracer`, `token_sentinel.rules.*`, and `token_sentinel.wrappers.*` is internal — pin a minor version if you import those. Pricing helpers live under `token_sentinel.pricing` and are re-exported from the package root.
 
 `WasteEvent is LeakEvent` and `WasteDetected is LeakDetected` are true (transparent aliases). Prefer either naming style; both stay first-class.
 
@@ -56,6 +60,8 @@ class Sentinel:
         judge_threshold_low: float = 0.5,
         judge_threshold_high: float = 0.8,
         judge_calls_per_month_max: int = 1_800_000,
+        # Optional override of built-in model → USD rates for estimated_burn
+        pricing_table: dict[str, ModelRate] | None = None,
     ) -> None: ...
 
     def wrap(self, client: T) -> T: ...
@@ -100,6 +106,7 @@ All parameters are keyword-only.
 | `policy_idle_poll_seconds` | `5.0` | Policy poll when idle |
 | `policy_failure_mode` | `"open"` | `"open"` = no policy after TTL; `"closed"` = synthetic kill-switch |
 | `judge_threshold_*` / `judge_calls_per_month_max` | see above | Forwarded to cloud as `X-Judge-*` headers (Pro-tier cloud feature) |
+| `pricing_table` | `None` | Optional map of model-name prefixes → `ModelRate` for burn estimates. `None` uses the shipped table; unknown models use a flat fallback |
 
 **Cloud sink activation:** both `cloud_endpoint` and `api_key` must be set. When they are, events are POSTed in **every** mode (`log` included) — mode is stamped on the wire for cloud analytics; it does not gate shipping.
 
@@ -205,8 +212,36 @@ class CallRecord:
 | `user_facing_output` | Typically true when response has text and no tool calls |
 | `raw_request` | Provider-shaped request fragment used by rules |
 | `raw_response_meta` | Stop reason, `streamed`, `usage_unavailable`, `prompt_tokens_details`, … |
-| `usage_extra` | Non-token billing: `dimension_kind`, `dimension_value`, optional `model_specific_meta` |
+| `usage_extra` | Non-token billing (`dimension_kind`, `dimension_value`, …); optional **`cache_read_tokens`** (prompt-cache hits from OpenAI/Anthropic); optional **`tokens_estimated`** when `[tiktoken]` filled missing usage |
 | `tags` | Chargeback tags from `Session` / enrichers |
+
+---
+
+## Cost estimates (`estimated_burn`)
+
+Burn figures on `LeakEvent` and policy budget projection are **approximate FinOps signals**, not provider invoices.
+
+| Behavior (1.0.3+) | Detail |
+|---|---|
+| Model-aware rates | Built-in table for major Anthropic / OpenAI / Gemini / DeepSeek / Cohere / Mistral families — input and output priced separately (USD per 1M tokens) |
+| Prefix match | e.g. `claude-sonnet-4-6` matches `claude-sonnet-4`; gateway prefixes like `anthropic/` are stripped |
+| Cache-read discount | When wrappers record `usage_extra["cache_read_tokens"]`, those tokens use a lower rate (default ~10% of input if the model does not define a cache rate) |
+| Unknown models | Flat historical average (~`$9e-6` / token) so estimates never go silent |
+| Optional tiktoken | `pip install token-sentinel[tiktoken]` — if both token counts are 0, `record_call` may estimate prompt tokens from `raw_request["messages"]` |
+
+```python
+from token_sentinel import estimate_usd, ModelRate, default_pricing_table, Sentinel
+
+# Ad-hoc estimate
+usd = estimate_usd("claude-haiku-4-5", prompt_tokens=10_000, completion_tokens=500)
+
+# Extend or override rates for your fleet
+table = default_pricing_table()
+table["my-finetune"] = ModelRate(input_per_mtok=0.5, output_per_mtok=1.5)
+sentinel = Sentinel(project="p", pricing_table=table)
+```
+
+Rates are a static snapshot for directionally correct comparisons (Haiku vs Opus). Refresh or override when list prices move.
 
 ---
 
@@ -315,8 +350,8 @@ See [Integrations](./06-integrations.md).
 
 ## Stability
 
-**Stable:** `Sentinel` public methods and constructor kwargs listed above; `CallRecord` / `LeakEvent` field names; exception types; rule **names** and documented config keys.
+**Stable:** `Sentinel` public methods and constructor kwargs listed above; `CallRecord` / `LeakEvent` field names; exception types; rule **names** and documented config keys; pricing helper names (`estimate_usd`, `ModelRate`, …).
 
-**Not stable:** tracer/rule/wrapper internals; exact confidence formulas; `suggested_action` string wording; cloud wire extras.
+**Not stable:** tracer/rule/wrapper internals; exact confidence formulas; `suggested_action` string wording; cloud wire extras; numeric entries in the default pricing table (rates may refresh in patch releases).
 
-`__version__` is the installed package version string (e.g. `"1.0.2"`).
+`__version__` is the installed package version string (e.g. `"1.0.3"`).

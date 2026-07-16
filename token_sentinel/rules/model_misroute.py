@@ -80,7 +80,7 @@ FRONTIER_PREFIXES = (
     "gemini-2.5-pro",
     "gemini-2.0-pro",
     # DeepSeek — only reasoner is treated as frontier misroute; chat (V3) is the
-# recommended cheap path and must not self-recommend (see CHEAP_ALTERNATIVES).
+    # recommended cheap path and must not self-recommend (see CHEAP_ALTERNATIVES).
     "deepseek-reasoner",
     # Cohere
     "command-r-plus",

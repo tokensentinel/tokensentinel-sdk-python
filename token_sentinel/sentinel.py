@@ -23,6 +23,12 @@ from token_sentinel.events import (
     LeakEvent,
     VelocityExceeded,
 )
+from token_sentinel.pricing import (
+    FALLBACK_USD_PER_TOKEN,
+    ModelRate,
+    estimate_call_usd,
+    maybe_fill_missing_tokens,
+)
 from token_sentinel.rules import Rule, default_rules
 from token_sentinel.tracer import Tracer
 
@@ -43,15 +49,11 @@ LeakHandler = Callable[[LeakEvent], None]
 # and the cloud's velocity_max_tokens_per_min semantics.
 _VELOCITY_WINDOW_SECONDS = 60.0
 
-# Per-call USD burn estimate. This is the same heuristic that
-# ``rules/tool_loop.py``'s ``_estimate_burn`` uses for its 3-cycle
-# extrapolation: average per-token cost across the major frontier models
-# rounds to about $9e-6 per token. We use it here at the per-call scale to
-# decide "would this call push us over the session budget?" before the rule
-# loop runs. Identical constant on purpose — deviation would create
-# confusion when a customer sees the rule-side and policy-side burn numbers
-# disagree.
-_BURN_USD_PER_TOKEN = 9e-6
+# Fallback flat rate when the model is unknown. Prefer model-aware rates
+# from :mod:`token_sentinel.pricing` (``estimate_call_usd``). Kept as an
+# alias of ``FALLBACK_USD_PER_TOKEN`` so historical imports / tests that
+# referenced the private name still resolve.
+_BURN_USD_PER_TOKEN = FALLBACK_USD_PER_TOKEN
 
 
 # Sentinel value distinguishing "kwarg not passed (use cloud_endpoint
@@ -225,18 +227,19 @@ class Session:
         return f"Session(session_id={self.session_id!r}, tags=[{tag_summary}])"
 
 
-def _estimate_call_burn_usd(call: CallRecord) -> float:
+def _estimate_call_burn_usd(
+    call: CallRecord,
+    pricing_table: dict[str, ModelRate] | None = None,
+) -> float:
     """Estimate the USD burn for a single call.
 
-    Uses the same per-token coefficient as :func:`tool_loop._estimate_burn`
-    so the policy plane and the rule engine agree on units. Negative token
-    counts (which would only arrive from a buggy provider parser) are
-    clamped to zero so we never produce a negative burn that could mask a
-    real overage.
+    Model-aware via :func:`token_sentinel.pricing.estimate_call_usd` when the
+    model is in the rate table; otherwise the historical flat average
+    (``FALLBACK_USD_PER_TOKEN``). Cache-read tokens in ``usage_extra`` are
+    billed at the discounted cache-read rate. Negative token counts are
+    clamped to zero inside the estimator.
     """
-    prompt = max(0, call.prompt_tokens)
-    completion = max(0, call.completion_tokens)
-    return (prompt + completion) * _BURN_USD_PER_TOKEN
+    return estimate_call_usd(call, pricing_table=pricing_table)
 
 
 class Sentinel:
@@ -296,12 +299,18 @@ class Sentinel:
         judge_threshold_low: float = 0.5,
         judge_threshold_high: float = 0.8,
         judge_calls_per_month_max: int = 1_800_000,
+        # Optional override of the built-in model price table used for
+        # ``estimated_burn`` and policy budget projection. Keys are model
+        # name prefixes; values are :class:`~token_sentinel.pricing.ModelRate`.
+        # Pass ``None`` (default) to use the shipped table + flat fallback.
+        pricing_table: dict[str, ModelRate] | None = None,
     ):
         self.project = project
         self.mode = mode
         self.config = config or {}
         self.cloud_endpoint = cloud_endpoint
         self.api_key = api_key
+        self.pricing_table = pricing_table
         # Clamp min_confidence to [0.0, 1.0] (LOW-4). A customer who passes
         # 2.0 would otherwise see no events fire ever; -1.0 would let every
         # event through. Both are surprising silent failures — clamp instead.
@@ -884,6 +893,10 @@ class Sentinel:
         # policy code path NEVER crashes the user's call. The exceptions
         # listed in the ``raise`` re-list are the only ones that propagate
         # — those are the enforcement signals the customer opted into.
+        # Optional tiktoken fill when the provider omitted usage (streaming
+        # without include_usage, etc.). Soft no-op without the extra.
+        maybe_fill_missing_tokens(call)
+
         self._enforce_policy(call)
 
         # Stamp chargeback tags from ``session(tags=...)`` when the wrapper
@@ -1154,7 +1167,7 @@ class Sentinel:
         # it runs — same heuristic as ``rules/tool_loop.py``'s burn estimator
         # so the SDK side and the cloud side agree on the units.
         if policy.budget_usd_per_session is not None:
-            next_call_burn = _estimate_call_burn_usd(call)
+            next_call_burn = _estimate_call_burn_usd(call, pricing_table=self.pricing_table)
             with self._policy_lock:
                 current_burn = self._session_burn.get(call.session_id, 0.0)
             projected = current_burn + next_call_burn
@@ -1208,6 +1221,8 @@ class Sentinel:
                         "this_call_tokens": this_call_tokens,
                         "max_tokens_per_min": policy.max_tokens_per_min,
                     },
+                    # Rough window cost using this call's model rate on the
+                    # projected token volume (velocity is token-capped, not $).
                     estimated_burn=round(projected_tokens * _BURN_USD_PER_TOKEN, 6),
                     suggested_action="halt_or_throttle",
                     raised_at=datetime.now(timezone.utc),
@@ -1245,7 +1260,7 @@ class Sentinel:
         if self._policy_client is None:
             return
 
-        burn_usd = _estimate_call_burn_usd(call)
+        burn_usd = _estimate_call_burn_usd(call, pricing_table=self.pricing_table)
         tokens = max(0, call.prompt_tokens) + max(0, call.completion_tokens)
         now = time.monotonic()
 

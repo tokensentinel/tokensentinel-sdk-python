@@ -386,9 +386,7 @@ def test_warning_is_suppressible_via_filterwarnings(monkeypatch):
     monkeypatch.setattr(openai_module, "_OpenAIStreamProxy", _BoomProxy)
 
     with warnings.catch_warnings(record=True) as caught:
-        warnings.filterwarnings(
-            "ignore", message=".*OpenAI streaming instrumentation bypassed.*"
-        )
+        warnings.filterwarnings("ignore", message=".*OpenAI streaming instrumentation bypassed.*")
         client.chat.completions.create(model="gpt-4o", messages=[], stream=True)
 
     assert _stream_warnings(caught) == []

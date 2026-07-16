@@ -1,12 +1,12 @@
 # TokenSentinel User Guide
 
-> **Python SDK version: `token-sentinel` 1.0.2**  
-> Install: `pip install "token-sentinel>=1.0.2,<2"` · Check: `python -c "import token_sentinel; print(token_sentinel.__version__)"`  
+> **Python SDK version: `token-sentinel` 1.0.3**  
+> Install: `pip install "token-sentinel>=1.0.3,<2"` · Check: `python -c "import token_sentinel; print(token_sentinel.__version__)"`  
 > Changelog: [CHANGELOG.md](https://github.com/tokensentinel/tokensentinel-sdk-python/blob/main/CHANGELOG.md) on GitHub
 
-TokenSentinel is an **open-source Python SDK** that detects token waste in AI agents while a session is still active, and gives your app a callback to log, alert, or hard-stop the agent before the *next* call goes out.
+TokenSentinel is an **open-source Python SDK** that detects token waste in AI agents while a session is still active, and gives your app a callback to log, alert or hard-stop the agent before the *next* call goes out.
 
-Detection runs **after** each provider response (that call is already billed). Intervention saves subsequent turns. Pair the free SDK with optional **TokenSentinel Cloud** (proprietary, paid) for dashboards, policy enforcement, and Pro calibration — nothing phones home unless you set `cloud_endpoint` and `api_key`.
+Detection runs **after** each provider response (that call is already billed). Intervention saves subsequent turns. Pair the free SDK with optional **TokenSentinel Cloud** for dashboards, policy enforcement, and Pro calibration — nothing phones home unless you set `cloud_endpoint` and `api_key`.
 
 ## Who this is for
 
@@ -21,6 +21,7 @@ If you only want post-hoc cost analytics, tools like Langfuse / LangSmith / Heli
 - **15** deterministic in-process rules (tool loops, context bloat, embedding waste, zombies, misroutes, retries, MCP tool-def bloat, RAG thrash, vision, audio multichannel, voice switching, rerank thrash, repair loops)
 - **9** native provider families + OpenAI-compatible endpoints
 - Modes: `log` | `alert` | `block`
+- **Model-aware `estimated_burn`** (per-model input/output rates; cache-read discount when providers report it; optional `[tiktoken]` when usage is missing)
 - Optional LangChain callback + OpenTelemetry span enrichers
 
 ## 30-second quickstart
@@ -33,16 +34,21 @@ pip install token-sentinel[anthropic]
 from token_sentinel import Sentinel
 import anthropic
 
-sentinel = Sentinel(project="my-agent", mode="log")
+sentinel = Sentinel(
+    project="my-agent",
+    mode="log",
+    # optional: tune thresholds — full tables in Waste rules
+    config={"tool_loop.min_calls": 5},
+)
 
-@sentinel.on_leak  # or @sentinel.on_waste
+@sentinel.on_waste  # or @sentinel.on_leak — same callback
 def handle(event):
-    print(f"[{event.type}] confidence={event.confidence:.2f} burn=${event.estimated_burn:.4f}")
+    print(f"[{event.type}] confidence={event.confidence:.2f} burn≈${event.estimated_burn:.4f}")
 
 client = sentinel.wrap(anthropic.Anthropic())
 ```
 
-`mode="log"` is safe for production day one. See [Modes](./03-modes.md) before enabling `block`.
+`mode="log"` is safe for production day one. See [Modes](./03-modes.md) before enabling `block`. Burn figures are approximate FinOps signals, not invoices — see [Cost estimates](./07-api-reference.md#cost-estimates-estimated_burn).
 
 ## Contents
 
@@ -56,15 +62,17 @@ client = sentinel.wrap(anthropic.Anthropic())
 8. [Troubleshooting](./08-troubleshooting.md) — common failures
 9. [FAQ](./09-faq.md) — OSS vs paid cloud, comparisons, contributing
 
-## Also in this repository
+## Related docs
 
 | Item | Location |
 |---|---|
-| Architecture | [`docs/architecture.md`](../architecture.md) |
-| Waste taxonomy (design depth) | [`docs/waste-taxonomy.md`](../waste-taxonomy.md) |
-| Examples | `examples/` |
-| Changelog | `CHANGELOG.md` |
-| License | `LICENSE` (Apache-2.0) |
+| Architecture | [SDK architecture](../architecture) |
+| Waste taxonomy (design depth) | [Waste taxonomy](../waste-taxonomy) |
+| Provider matrix | [Providers](../providers) |
+| Provider quickstarts | [OpenAI](../quickstart-openai) · [Anthropic](../quickstart-anthropic) · [Gemini](../quickstart-gemini) · [Bedrock](../quickstart-bedrock) |
+| Cloud (paid) user journey | [tokensentinel.dev](https://tokensentinel.dev) (Cloud docs coming soon) |
+| Examples / changelog / license | [GitHub SDK repo](https://github.com/tokensentinel/tokensentinel-sdk-python) · [CHANGELOG](https://github.com/tokensentinel/tokensentinel-sdk-python/blob/main/CHANGELOG.md) |
+
 
 ## Conventions
 
@@ -74,7 +82,7 @@ client = sentinel.wrap(anthropic.Anthropic())
 
 ## Stability
 
-Package version **1.0.2+**. Public API: `Sentinel`, `wrap`, `on_leak` / `on_waste`, `record_call`, `session`, `mark_long_running`, `close`, `CallRecord`, `LeakEvent` / `WasteEvent`, `LeakDetected` / `WasteDetected`, policy exceptions. Semver applies. Internal modules may change between minors.
+Package version **1.0.3+**. Public API: `Sentinel`, `wrap`, `on_leak` / `on_waste`, `record_call`, `session`, `mark_long_running`, `close`, `CallRecord`, `LeakEvent` / `WasteEvent`, `LeakDetected` / `WasteDetected`, policy exceptions, pricing helpers (`estimate_usd`, `ModelRate`, `default_pricing_table`). Semver applies. Internal modules may change between minors.
 
 ## Getting help
 

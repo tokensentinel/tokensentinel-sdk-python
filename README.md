@@ -1,69 +1,25 @@
 # token-sentinel
 
-Predictive token-waste detection for AI agents.
+Predictive **token-waste detection** for AI agents — a Python SDK that runs
+**in-process**, watches LLM calls after each provider response, and fires a
+typed callback so you can log, alert, or hard-stop the next turn.
 
-A Python SDK that catches token waste *mid-run* — while a session is still active — and gives your app a callback to log, alert or hard-stop the agent before the *next* call goes out. Detection runs after each provider response returns (that call is already billed); intervention saves subsequent turns. Pair the SDK with the optional TokenSentinel Cloud for hosted dashboards, budget enforcement, drift detection, and judge ratification on Pro tier.
+Observability tools show the bill after the fact. TokenSentinel names the waste
+pattern **while the session is still running**. Detection is post-call (the
+turn that just finished is already billed); intervention saves **subsequent**
+turns.
 
-Existing observability tools (Langfuse, LangSmith, Helicone, Datadog LLM) tell you what your bill was. TokenSentinel tells you which agent is leaking(wasting tokens) *right now*.
+**Docs:** [https://docs.tokensentinel.dev](https://docs.tokensentinel.dev)
 
-**Documentation:** [https://docs.tokensentinel.dev](https://docs.tokensentinel.dev)
-
-## What it catches
-
-Fifteen deterministic rules, all in-process, sub-millisecond per rule:
-
-| Leak / Waste | Signal |
-|---|---|
-| **Tool-loop** | Same tool, ≥3 cosine-similar calls in a window |
-| **Context bloat** | Prompt-tokens-per-turn slope rising past threshold |
-| **Embedding waste** | Same embedding lookup repeated within session |
-| **Zombie agent** | No user-facing output for N min, calls still firing |
-| **Model misroute** | Classification-shaped prompt sent to a frontier model |
-| **Retry storm** | Same call retried >N times without parameter change |
-| **Tool-definition bloat** | A single request ships ≥30 tool defs or ≥30KB of tool JSON (the MCP problem) |
-| **Retrieval thrash** | Retrieval tool called repeatedly with overlapping queries (the RAG problem) |
-| **Vision re-upload** | Same image (SHA-256 or perceptual hash) uploaded repeatedly across turns |
-| **Vision detail misroute** | High-detail vision flag on low-detail-suitable images (e.g. icons, low-res) |
-| **Vision concentration** | Visual tokens heavily concentrated in a single/few outlier sessions |
-| **Audio channel doubling** | Stereo/multichannel audio transcription when mono-channel would suffice |
-| **Voice switching loop** | Rapid shifting of ElevenLabs voice IDs on identical text payloads |
-| **Rerank thrash** | Cohere rerank API requests repeated for identical search lists |
-| **Repair loop** | Conversational loop with repeated user corrections and similar agent regenerations |
-
-**Composite signals (Pro tier, cloud-side)**
-
-| Composite | Fires when |
-|---|---|
-| **lost_agent** | `tool_loop` + `context_bloat` + `model_misroute` all hit on the same session inside a 30s window |
-| **runaway_retrieval** | `retrieval_thrash` + `embedding_waste` co-fire while the per-turn token slope is still climbing |
-| **zombie_loop** | `zombie` + `retry_storm` co-fire on a session with no user-facing output |
-
-## Supported providers
-
-Native wrappers — `pip install token-sentinel[<provider>]`:
-
-| Provider | SDK | Streaming | Async |
-|---|---|---|---|
-| Anthropic | `anthropic` | yes | yes |
-| OpenAI | `openai` | yes¹ | yes |
-| Google Gemini | `google-genai` | yes | yes |
-| AWS Bedrock | `boto3` | yes | sync only |
-
-¹ OpenAI streaming is fully instrumented; pass `stream_options={"include_usage": True}` for token counts on streams.
-
-Transparent through the OpenAI wrapper (just set `base_url`):
-
-DeepSeek · Together AI · Fireworks · Groq · OpenRouter · Anyscale · Mistral La Plateforme · Perplexity · vLLM · Ollama · text-generation-inference · LM Studio
-
-Google Vertex AI is reached via the same Gemini wrapper by passing `vertexai=True` to `genai.Client(...)`.
-
-See [docs/providers.md](docs/providers.md) for the full matrix and per-provider snippets.
-
-## Quick start
+## Install
 
 ```bash
-pip install token-sentinel[anthropic]
+pip install token-sentinel[anthropic]   # or [openai], [gemini], …
+# optional: local token estimates when usage is missing
+pip install token-sentinel[tiktoken]
 ```
+
+## Quick start
 
 ```python
 from token_sentinel import Sentinel
@@ -71,12 +27,11 @@ import anthropic
 
 sentinel = Sentinel(project="my-agent", mode="log")  # log | alert | block
 
-@sentinel.on_leak
+@sentinel.on_waste  # or @sentinel.on_leak — same callback
 def handle(event):
-    print(f"LEAK [{event.type}] confidence={event.confidence:.2f} burn=${event.estimated_burn:.4f}")
+    print(f"{event.type} conf={event.confidence:.2f} burn≈${event.estimated_burn:.4f}")
 
 client = sentinel.wrap(anthropic.Anthropic())
-# use the client normally — Sentinel watches in-process
 client.messages.create(
     model="claude-sonnet-4-6",
     max_tokens=100,
@@ -84,99 +39,124 @@ client.messages.create(
 )
 ```
 
-Switch providers by installing the right extra and changing one line:
+### Tune rule thresholds
+
+Every rule exposes flat config keys `"rule_name.param"`. Example — require five
+similar tool calls (default is **3**) before `tool_loop` fires:
 
 ```python
-# DeepSeek (or any OpenAI-compatible endpoint)
-import openai
-client = sentinel.wrap(openai.OpenAI(base_url="https://api.deepseek.com"))
-
-# Google Gemini
-from google import genai
-client = sentinel.wrap(genai.Client())
-
-# AWS Bedrock
-import boto3
-client = sentinel.wrap(boto3.client("bedrock-runtime"))
+sentinel = Sentinel(
+    project="my-agent",
+    mode="log",
+    config={
+        "tool_loop.min_calls": 5,
+        "tool_loop.cosine_threshold": 0.80,
+        "tool_loop.window_seconds": 120,
+    },
+)
 ```
 
-Per-provider deep dives — install, wrap, leak, stream, async, production:
+Full parameter tables: [docs/user/04-waste-rules.md](docs/user/04-waste-rules.md).
 
-- [Anthropic quickstart](docs/quickstart-anthropic.md)
-- [OpenAI quickstart](docs/quickstart-openai.md) (covers DeepSeek, Together, Groq, vLLM, Ollama, …)
-- [Gemini quickstart](docs/quickstart-gemini.md) (covers Vertex AI)
-- [Bedrock quickstart](docs/quickstart-bedrock.md)
+## What it catches (15 rules)
+
+| Rule | Signal |
+|---|---|
+| **tool_loop** | Same tool, ≥N cosine-similar calls in a window |
+| **context_bloat** | Prompt-tokens-per-turn slope rising |
+| **embedding_waste** | Same embedding lookup repeated in session |
+| **zombie** | Calls continue with no user-facing output |
+| **model_misroute** | Classification-shaped prompt on a frontier model |
+| **retry_storm** | Same call retried many times unchanged |
+| **tool_definition_bloat** | Huge tool JSON / MCP tool lists |
+| **retrieval_thrash** | Overlapping retrieval queries |
+| **vision_re_upload** | Same image re-uploaded across turns |
+| **vision_high_detail_misroute** | High-detail flag on low-detail work |
+| **vision_cost_concentration** | Vision spend concentrated in few sessions |
+| **audio_multichannel_doubling** | Multichannel STT billing trap |
+| **voice_switching_loop** | Same text, many voice IDs |
+| **rerank_thrash** | Duplicate Cohere rerank requests |
+| **repair_loop** | Correction churn + similar regenerations |
+
+## Providers
+
+Native wrappers (`pip install token-sentinel[<extra>]`):
+
+| Provider | Extra | Streaming |
+|---|---|---|
+| Anthropic | `anthropic` | yes |
+| OpenAI (+ Whisper) | `openai` | yes |
+| Google Gemini / Vertex | `gemini` | yes |
+| AWS Bedrock | `bedrock` | yes |
+| Voyage, Cohere, Replicate, Deepgram, ElevenLabs | matching extra | varies |
+
+**OpenAI-compatible hosts** (same wrapper, set `base_url`): DeepSeek, Together,
+Fireworks, Groq, OpenRouter, Mistral, Perplexity, vLLM, Ollama, TGI, LM Studio,
+xAI Grok (`https://api.x.ai/v1`), etc.
+
+```python
+import openai
+client = sentinel.wrap(
+    openai.OpenAI(api_key="…", base_url="https://api.deepseek.com")
+)
+```
+
+Pass a stable `_sentinel_session_id=...` on each call (or use
+`Sentinel.session(...)`) so multi-turn rules see history.
 
 ## Modes
 
 | Mode | Behavior |
 |---|---|
-| `log` | Emit events to your handler. Default. Safe for production from day one. |
-| `alert` | Same handler behavior as `log` (cloud is separate — see below). |
-| `block` | Raise `LeakDetected` after the provider returns (halts the agent loop). Opt-in. |
+| `log` | Emit events to your handler. Default. Safe for prod day one. |
+| `alert` | Same local behavior as `log` (mode stamp for optional cloud). |
+| `block` | Raise `LeakDetected` / `WasteDetected` **after** the provider returns. |
 
-Cloud event shipping requires `cloud_endpoint` **and** `api_key` and works in **any** mode. Without those kwargs, nothing leaves the process.
+## Cost estimates (`estimated_burn`)
 
-## Works with MCP, RAG, and orchestration frameworks
+Burn figures are **approximate FinOps signals**, not invoices:
 
-TokenSentinel instruments at the LLM-client layer, so it transparently catches traffic from MCP hosts, RAG pipelines, and orchestration frameworks (LangChain, LangGraph, CrewAI, AutoGen, Pydantic AI). See [docs/integration-patterns.md](docs/integration-patterns.md).
+- **Model-aware rates** for major Anthropic / OpenAI / Gemini / DeepSeek / Cohere / Mistral families (input vs output priced separately).
+- **Prompt-cache reads** (OpenAI `cached_tokens`, Anthropic `cache_read_input_tokens`) discounted when present on the usage payload.
+- **Unknown models** fall back to a flat average (~$9e-6 / token).
+- Optional **`tiktoken`** fills missing token counts when usage was omitted.
 
-## Cloud (optional, proprietary)
+Override rates with `Sentinel(pricing_table={...})` or
+`from token_sentinel import estimate_usd, ModelRate, default_pricing_table`.
 
-This repository is the **Apache-2.0 SDK only**. The commercial product is separate:
+## Frameworks
 
-| Free (this package) | Paid TokenSentinel Cloud |
-|---|---|
-| 15 rules, 9 providers, log/alert/block | Hosted dashboard, retention, webhooks |
-| Zero network by default | Intervention Pack: budgets, velocity, kill-switch |
-| Self-host friendly | Pro: judge, drift, composites, RBAC, chargeback |
+Instruments at the LLM-client layer, so MCP hosts, RAG pipelines, LangChain /
+LangGraph / CrewAI / AutoGen / Pydantic AI work when traffic bottoms out in a
+wrapped client. Enrichers: `pip install token-sentinel[langchain]` or `[otel]`.
 
-Configure cloud via `cloud_endpoint=` and `api_key=` on `Sentinel(...)`. Tier comparison and pricing: [tokensentinel.dev](https://tokensentinel.dev). Full user guide: [https://docs.tokensentinel.dev](https://docs.tokensentinel.dev).
+## Optional cloud
 
-## Migrate from Helicone / Langfuse / LangSmith
-
-The `tokensentinel-migrate` companion package replays your existing trace history through the rules and backfills events into your TokenSentinel cloud project. See the [tokensentinel-migrate package on PyPI](https://pypi.org/project/tokensentinel-migrate/).
-
-```bash
-pip install tokensentinel-migrate
-python -m tokensentinel_migrate helicone --helicone-api-key sk-... --tokensentinel-endpoint https://... --tokensentinel-api-key tsk_... --project my-agent --since 2026-04-09 --dry-run
-```
-
-> **Self-hosted note.** vLLM / Ollama / TGI all expose OpenAI-compatible endpoints, so TokenSentinel works against them out of the box. Leak signals are real, but the dollar burn estimate assumes priced API usage — for self-hosted, treat the burn estimate as a quality signal, not a billing signal.
+Nothing phones home unless you pass both `cloud_endpoint=` and `api_key=` on
+`Sentinel(...)`. For hosted dashboard, Composite Signals and policy features — see [tokensentinel.dev](https://tokensentinel.dev). This package is
+**Apache-2.0** and fully usable offline.
 
 ## Status
 
-**Current release: 1.0.2** — 15 deterministic rules, 9 native providers (Anthropic, OpenAI, Gemini, Bedrock, Voyage, Cohere, Replicate, Deepgram, ElevenLabs), streaming + async, and optional TokenSentinel Cloud policy integration.
+**1.0.3** — 15 rules, model-aware burn estimates, cache-aware usage, optional
+tiktoken fallback, OSS-focused docs.
 
-See [CHANGELOG.md](CHANGELOG.md) for release notes (1.0.2 contact/metadata; 1.0.1 rule fixes and docs accuracy pass).
+Public API (`Sentinel`, `wrap`, `on_leak` / `on_waste`, `record_call`, `session`,
+`mark_long_running`, events/exceptions, pricing helpers) follows semver —
+pin deliberately (`token-sentinel>=1.0,<2`).
 
-The public API surface (`Sentinel`, `wrap`, `on_leak` / `on_waste`, `record_call`, `session`, `mark_long_running`, `LeakEvent` / `WasteEvent`, `CallRecord`, `LeakDetected` / `WasteDetected`, plus policy exceptions `BudgetExceeded`, `VelocityExceeded`, `KillSwitchActive`) is stable and follows semver — pin deliberately (e.g. `token-sentinel>=1.0,<2`).
+## More docs
 
-## Architecture
+- [User guide](docs/user/) — install, modes, rules, providers, API reference  
+- [Architecture](docs/architecture.md) · [Waste taxonomy](docs/waste-taxonomy.md)  
+- [CHANGELOG](CHANGELOG.md)
 
-- **SDK (this package)** — Python wrapper around all major LLM clients. Apache-2.0 licensed.
-- **Optional cloud dashboard** — closed-source, hosted at `api.tokensentinel.dev`. Provides retention, dashboards, the Intervention Pack policy plane, the LLM-as-judge ratification pipeline, drift / stability scoring, RBAC + audit, and multi-environment routing. The SDK works perfectly without it; nothing phones home unless you explicitly configure `cloud_endpoint` and `api_key`.
+## Contact
 
-rule detection runs entirely in-process. The composite rules and judge ratification run cloud-side on top of the same `LeakEvent` stream. Cloud is opt-in for retention, dashboards, team features, and the chargeback attribution coming in V2.
-
-## Docs
-
-- **Hosted docs:** [https://docs.tokensentinel.dev](https://docs.tokensentinel.dev)
-- **Homepage:** [https://tokensentinel.dev](https://tokensentinel.dev)
-
-Also in this repository:
-
-- [User Guide](docs/user/) — installation, quickstart, modes, waste rules, providers, integrations, API reference
-- [Architecture](docs/architecture.md) — how the wrapper, tracer, and rules engine fit together
-- [Waste taxonomy](docs/waste-taxonomy.md) — the rules in detail with thresholds and false-positive hazards
-- [Providers](docs/providers.md) — full matrix of supported providers
-- [Integration patterns](docs/integration-patterns.md) — MCP, RAG, LangChain, LangGraph, CrewAI, AutoGen, Pydantic AI
-- [Changelog](CHANGELOG.md)
-
-## Contact & Support
-
-For support: [support@tokensentinel.dev](mailto:support@tokensentinel.dev) · general: [hello@tokensentinel.dev](mailto:hello@tokensentinel.dev) · [tokensentinel.dev](https://tokensentinel.dev) · [docs.tokensentinel.dev](https://docs.tokensentinel.dev).
+[support@tokensentinel.dev](mailto:support@tokensentinel.dev) ·
+[hello@tokensentinel.dev](mailto:hello@tokensentinel.dev) ·
+[tokensentinel.dev](https://tokensentinel.dev)
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE). The patent grant in Apache-2.0 is the right OSS contract for an SDK that runs inline against enterprise customers' production AI calls.
+Apache-2.0 — see [LICENSE](LICENSE).

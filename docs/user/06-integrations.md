@@ -1,6 +1,6 @@
 # Integrations
 
-> **Documented for Python SDK `token-sentinel` 1.0.2.**
+> **Documented for Python SDK `token-sentinel` 1.0.3.**
 
 
 TokenSentinel instruments LLM traffic in two ways:

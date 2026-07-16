@@ -102,10 +102,7 @@ class ToolLoopRule(Rule):
         max_arg_bytes = self.get("max_arg_bytes", DEFAULT_MAX_ARG_BYTES)
         max_total_corpus_bytes = self.get("max_total_corpus_bytes", DEFAULT_MAX_TOTAL_CORPUS_BYTES)
         include_raw_args = self.get("include_raw_args", False)
-        polling_tools = {
-            str(n).lower()
-            for n in self.get("polling_tools", DEFAULT_POLLING_TOOLS)
-        }
+        polling_tools = {str(n).lower() for n in self.get("polling_tools", DEFAULT_POLLING_TOOLS)}
 
         now = session[-1].timestamp
         recent = [c for c in session if elapsed_seconds(now, c.timestamp) <= window]
@@ -583,6 +580,8 @@ def _estimate_burn(recent: list[CallRecord]) -> float:
     """Rough USD estimate of next 3 cycles at the current burn rate."""
     if not recent:
         return 0.0
-    avg_tokens = sum(c.prompt_tokens + c.completion_tokens for c in recent) / len(recent)
-    cost_per_call = avg_tokens * 9e-6
-    return round(cost_per_call * 3, 4)
+    from token_sentinel.pricing import estimate_call_usd
+
+    per_call = [estimate_call_usd(c) for c in recent]
+    avg_cost = sum(per_call) / len(per_call)
+    return round(avg_cost * 3, 4)

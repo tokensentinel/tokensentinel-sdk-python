@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-import pytest
-
 from token_sentinel.rules.zombie import ZombieRule
 
 # ---------------------------------------------------------------------------
@@ -305,9 +303,11 @@ def test_mark_long_running_via_sentinel(make_call, now):
         )
     # Without opt-out this would fire; with mark_long_running it must not.
     events = []
+
     @s.on_leak
     def h(e):
         events.append(e)
+
     # Force re-eval by recording another silent call past threshold
     s.record_call(
         make_call(
