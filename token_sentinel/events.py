@@ -69,6 +69,11 @@ class CallRecord:
     # backwards-compatible default — pre- customers who don't call
     # session() get the same CallRecord shape as before.
     tags: dict[str, str] = field(default_factory=dict)
+    # Optional host-agent identity (coding harnesses / multi-agent). Empty for
+    # classic wrap() clients. Harness adapters may set this *and* use a
+    # composite session_id for rule windows; typed field is for chargeback /
+    # cloud / reports without parsing session_id conventions.
+    agent_id: str = ""
 
 
 @dataclass
@@ -116,6 +121,8 @@ class LeakEvent:
     # Empty dict for sessions that weren't created with tags — preserves
     # back-compat for every pre- leak-handler call site.
     tags: dict[str, str] = field(default_factory=dict)
+    # Propagated from CallRecord.agent_id when present (multi-agent hosts).
+    agent_id: str = ""
 
     def __str__(self) -> str:
         # NIT-3: include session_id and a key-only evidence summary so

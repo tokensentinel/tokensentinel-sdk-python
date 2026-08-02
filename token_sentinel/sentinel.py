@@ -933,6 +933,8 @@ class Sentinel:
             # want to add its own metadata).
             if call.tags and not ev.tags:
                 ev.tags = dict(call.tags)
+            if call.agent_id and not ev.agent_id:
+                ev.agent_id = call.agent_id
             events.append(ev)
 
         # Prefer retrieval_thrash over tool_loop when both fire on the same
