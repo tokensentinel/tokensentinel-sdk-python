@@ -108,6 +108,9 @@ def _make_sync_create(original_create: Any, sentinel: Sentinel) -> Any:
     @functools.wraps(original_create)
     def instrumented_create(*args: Any, **kwargs: Any) -> Any:
         session_id: str = kwargs.pop("_sentinel_session_id", str(uuid.uuid4()))
+        from token_sentinel.wrappers.preflight import guard_before_call
+
+        guard_before_call(sentinel, session_id)
         start = time.perf_counter()
         try:
             response = original_create(*args, **kwargs)
@@ -144,6 +147,9 @@ def _make_async_create(original_create: Any, sentinel: Sentinel) -> Any:
     @functools.wraps(original_create)
     async def instrumented_create(*args: Any, **kwargs: Any) -> Any:
         session_id: str = kwargs.pop("_sentinel_session_id", str(uuid.uuid4()))
+        from token_sentinel.wrappers.preflight import guard_before_call
+
+        guard_before_call(sentinel, session_id)
         start = time.perf_counter()
         try:
             response = await original_create(*args, **kwargs)

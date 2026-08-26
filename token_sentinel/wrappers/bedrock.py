@@ -90,6 +90,9 @@ def _make_converse(original_converse: Any, sentinel: Sentinel) -> Any:
     @functools.wraps(original_converse)
     def instrumented_converse(*args: Any, **kwargs: Any) -> Any:
         session_id: str = kwargs.pop("_sentinel_session_id", str(uuid.uuid4()))
+        from token_sentinel.wrappers.preflight import guard_before_call
+
+        guard_before_call(sentinel, session_id)
         start = time.perf_counter()
         try:
             response = original_converse(*args, **kwargs)
@@ -376,6 +379,9 @@ def _make_converse_stream(original_stream: Any, sentinel: Sentinel) -> Any:
     @functools.wraps(original_stream)
     def instrumented_converse_stream(*args: Any, **kwargs: Any) -> Any:
         session_id: str = kwargs.pop("_sentinel_session_id", str(uuid.uuid4()))
+        from token_sentinel.wrappers.preflight import guard_before_call
+
+        guard_before_call(sentinel, session_id)
         start = time.perf_counter()
         try:
             response = original_stream(*args, **kwargs)

@@ -88,6 +88,9 @@ def _patch_sync_generate_content(models: Any, sentinel: Sentinel) -> None:
     @functools.wraps(original)
     def instrumented(*args: Any, **kwargs: Any) -> Any:
         session_id: str = kwargs.pop("_sentinel_session_id", str(uuid.uuid4()))
+        from token_sentinel.wrappers.preflight import guard_before_call
+
+        guard_before_call(sentinel, session_id)
         start = time.perf_counter()
         try:
             response = original(*args, **kwargs)
@@ -128,6 +131,9 @@ def _patch_async_generate_content(aio_models: Any, sentinel: Sentinel) -> None:
     @functools.wraps(original)
     async def instrumented(*args: Any, **kwargs: Any) -> Any:
         session_id: str = kwargs.pop("_sentinel_session_id", str(uuid.uuid4()))
+        from token_sentinel.wrappers.preflight import guard_before_call
+
+        guard_before_call(sentinel, session_id)
         start = time.perf_counter()
         try:
             response = await original(*args, **kwargs)

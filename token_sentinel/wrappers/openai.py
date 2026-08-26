@@ -512,6 +512,9 @@ def _patch_chat_completions(
         @functools.wraps(original_create)
         async def instrumented_create_async(*args: Any, **kwargs: Any) -> Any:
             session_id: str = kwargs.pop("_sentinel_session_id", str(uuid.uuid4()))
+            from token_sentinel.wrappers.preflight import guard_before_call
+
+            guard_before_call(sentinel, session_id)
 
             if kwargs.get("stream") is True:
                 return await _instrumented_async_stream(
@@ -554,6 +557,9 @@ def _patch_chat_completions(
     @functools.wraps(original_create)
     def instrumented_create(*args: Any, **kwargs: Any) -> Any:
         session_id: str = kwargs.pop("_sentinel_session_id", str(uuid.uuid4()))
+        from token_sentinel.wrappers.preflight import guard_before_call
+
+        guard_before_call(sentinel, session_id)
 
         if kwargs.get("stream") is True:
             return _instrumented_sync_stream(
@@ -699,6 +705,9 @@ def _patch_embeddings(client: Any, sentinel: Sentinel) -> None:
         @functools.wraps(original_create)
         async def instrumented_embed_async(*args: Any, **kwargs: Any) -> Any:
             session_id: str = kwargs.pop("_sentinel_session_id", str(uuid.uuid4()))
+            from token_sentinel.wrappers.preflight import guard_before_call
+
+            guard_before_call(sentinel, session_id)
             start = time.perf_counter()
             try:
                 response = await original_create(*args, **kwargs)
@@ -729,6 +738,9 @@ def _patch_embeddings(client: Any, sentinel: Sentinel) -> None:
     @functools.wraps(original_create)
     def instrumented_embed(*args: Any, **kwargs: Any) -> Any:
         session_id: str = kwargs.pop("_sentinel_session_id", str(uuid.uuid4()))
+        from token_sentinel.wrappers.preflight import guard_before_call
+
+        guard_before_call(sentinel, session_id)
         start = time.perf_counter()
         try:
             response = original_create(*args, **kwargs)

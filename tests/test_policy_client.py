@@ -44,6 +44,8 @@ from token_sentinel import (
     BudgetExceeded,
     KillSwitchActive,
     LeakDetected,
+    OrgBudgetExceeded,
+    PreflightBlocked,
     Sentinel,
     VelocityExceeded,
 )
@@ -612,6 +614,9 @@ def _set_policy_directly(sentinel: Sentinel, **kwargs) -> Policy:
         kill_switch_active=kwargs.pop("kill_switch_active", False),
         fetched_at=fetched_at,
         ttl_seconds=ttl,
+        budget_usd_per_org=kwargs.pop("budget_usd_per_org", None),
+        org_spend_usd=float(kwargs.pop("org_spend_usd", 0.0) or 0.0),
+        preflight_block_patterns=tuple(kwargs.pop("preflight_block_patterns", ()) or ()),
     )
     sentinel._policy_client._policy = policy
     return policy
@@ -1046,3 +1051,62 @@ def test_policy_check_overhead_is_below_100us(sentinel_with_policy, make_call):
     # 200us is the loose CI-tolerant ceiling; the implementation runs
     # closer to 5–20us on a reasonable machine.
     assert p95 < 200e-6, f"policy-check p95 too slow: {p95 * 1e6:.1f}us"
+
+
+def test_org_budget_exceeded(sentinel_with_policy, make_call):
+    s = sentinel_with_policy
+    _set_policy_directly(
+        s,
+        budget_usd_per_org=0.01,
+        org_spend_usd=0.009,
+    )
+    call = make_call(
+        session_id="s-org",
+        prompt_tokens=1000,
+        completion_tokens=200,
+        model="unknown-flat-rate-model",
+    )
+    with pytest.raises(OrgBudgetExceeded) as exc_info:
+        s.record_call(call)
+    assert exc_info.value.budget_usd == 0.01
+    assert isinstance(exc_info.value, LeakDetected)
+
+
+def test_preflight_blocks_recognised_pattern(sentinel_with_policy, make_call):
+    s = sentinel_with_policy
+    _set_policy_directly(s, preflight_block_patterns=("tool_loop",))
+    # First record_call that fires tool_loop should raise PreflightBlocked
+    # after handlers. We force a leak by recording enough similar tool
+    # calls... but that's heavy. Instead flag the session and call preflight.
+    s._preflight_flagged["s-pf"] = {"tool_loop"}
+    with pytest.raises(PreflightBlocked) as exc_info:
+        s.preflight("s-pf")
+    assert exc_info.value.pattern == "tool_loop"
+
+
+def test_preflight_kill_switch_before_provider(sentinel_with_policy):
+    s = sentinel_with_policy
+    _set_policy_directly(s, kill_switch_active=True)
+    with pytest.raises(KillSwitchActive):
+        s.preflight("s-kill-pf")
+
+
+def test_preflight_halts_when_org_already_over_cap(sentinel_with_policy):
+    s = sentinel_with_policy
+    _set_policy_directly(s, budget_usd_per_org=10.0, org_spend_usd=12.0)
+    with pytest.raises(OrgBudgetExceeded):
+        s.preflight("s-over")
+
+
+def test_parse_policy_org_and_preflight_fields():
+    payload = {
+        "policy_version": 7,
+        "budget_usd_per_org": 50.0,
+        "org_spend_usd": 12.5,
+        "preflight_block_patterns": ["tool_loop", "retry_storm"],
+        "kill_switch_active": False,
+    }
+    p = _parse_policy(payload)
+    assert p.budget_usd_per_org == 50.0
+    assert p.org_spend_usd == 12.5
+    assert p.preflight_block_patterns == ("tool_loop", "retry_storm")

@@ -220,12 +220,58 @@ class KillSwitchActive(LeakDetected):
 
     Halts ALL in-flight calls for the project at the next call boundary. The
     operator's intent is "stop this agent right now"; the SDK obeys at the
-    next ``record_call``. There is no grace period or per-session opt-out —
-    kill-switch is total.
+    next ``record_call`` *and* at ``Sentinel.preflight`` (the wrap-time
+    check that runs before the provider HTTP call).
     """
 
     def __init__(self, event: LeakEvent, *, policy: Policy):
         self.policy = policy
+        super().__init__(event)
+
+
+class OrgBudgetExceeded(LeakDetected):
+    """Raised when org-level trailing spend would exceed ``budget_usd_per_org``.
+
+    Distinct from :class:`BudgetExceeded` (per-session). The cloud pushes
+    both the ceiling and the current org spend on ``GET /v1/policy``;
+    the SDK adds local increments so multi-session agents in one process
+    share the same cap.
+    """
+
+    def __init__(
+        self,
+        event: LeakEvent,
+        *,
+        policy: Policy,
+        current_usd: float,
+        next_call_usd: float,
+        budget_usd: float,
+    ):
+        self.policy = policy
+        self.current_usd = current_usd
+        self.next_call_usd = next_call_usd
+        self.budget_usd = budget_usd
+        super().__init__(event)
+
+
+class PreflightBlocked(LeakDetected):
+    """Raised when a historically recognised waste pattern is already
+    firing on this session and the operator (or auto-recommend) enabled
+    pre-flight stop for that pattern.
+
+    ``Sentinel.preflight`` raises this *before* the provider call so the
+    next iteration of an already-detected loop does not spend again.
+    """
+
+    def __init__(
+        self,
+        event: LeakEvent,
+        *,
+        policy: Policy,
+        pattern: str,
+    ):
+        self.policy = policy
+        self.pattern = pattern
         super().__init__(event)
 
 

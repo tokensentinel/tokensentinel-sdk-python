@@ -21,6 +21,8 @@ from token_sentinel.events import (
     KillSwitchActive,
     LeakDetected,
     LeakEvent,
+    OrgBudgetExceeded,
+    PreflightBlocked,
     VelocityExceeded,
 )
 from token_sentinel.pricing import (
@@ -459,6 +461,14 @@ class Sentinel:
         self._tokens_minute_window: deque[tuple[float, int]] = deque()
         self._policy_lock = threading.Lock()
         self._max_sessions_for_burn = max_sessions
+        # Org-level burn: seeded from ``policy.org_spend_usd`` whenever the
+        # policy version changes, then incremented locally so every session
+        # in this process shares one ceiling.
+        self._org_burn_local: float = 0.0
+        self._org_burn_policy_version: int | None = None
+        # session_id → waste types already recognised this session (for
+        # pre-flight stop of the *next* provider call).
+        self._preflight_flagged: dict[str, set[str]] = {}
 
         # Resolve policy_endpoint:
         #   - default sentinel ``_POLICY_DEFAULT`` → fall back to
@@ -960,10 +970,19 @@ class Sentinel:
         if self._dedup_window_seconds > 0 and events:
             events = self._filter_duplicate_events(call.session_id, events)
 
+        # Historical pre-flight: if this session just fired a pattern the
+        # cloud has marked as a recurring waste trend, flag it so the
+        # *next* wrap() call is stopped before the provider HTTP.
+        preflight_hit = self._note_preflight_hits(call.session_id, events)
+
         # Run handlers for ALL events first so customer handlers see every
         # leak signal, regardless of mode.
         for ev in events:
             self._run_handlers(ev)
+
+        if preflight_hit is not None:
+            self._emit_policy_event(preflight_hit.event)
+            raise preflight_hit
 
         # Then, in block mode, raise exactly once with the highest-confidence
         # event. Tiebreak: first event in iteration order (which is rule
@@ -1163,13 +1182,50 @@ class Sentinel:
                 suggested_action="halt_immediately",
                 raised_at=datetime.now(timezone.utc),
             )
+            self._emit_policy_event(event)
             raise KillSwitchActive(event, policy=policy)
+
+        next_call_burn = _estimate_call_burn_usd(call, pricing_table=self.pricing_table)
+
+        # Org-level ceiling (design-partner paid umbrella). Seeded from
+        # the cloud's trailing spend, incremented locally.
+        if policy.budget_usd_per_org is not None:
+            with self._policy_lock:
+                if self._org_burn_policy_version != policy.policy_version:
+                    self._org_burn_local = float(policy.org_spend_usd or 0.0)
+                    self._org_burn_policy_version = policy.policy_version
+                current_org = self._org_burn_local
+            projected_org = current_org + next_call_burn
+            if projected_org > policy.budget_usd_per_org:
+                event = LeakEvent(
+                    type="org_budget_exceeded",
+                    confidence=1.0,
+                    project=self.project,
+                    session_id=call.session_id,
+                    rule="v0.6.policy.org_budget",
+                    evidence={
+                        "policy_version": policy.policy_version,
+                        "current_usd": round(current_org, 6),
+                        "next_call_usd": round(next_call_burn, 6),
+                        "budget_usd": policy.budget_usd_per_org,
+                    },
+                    estimated_burn=round(projected_org, 6),
+                    suggested_action="halt_org",
+                    raised_at=datetime.now(timezone.utc),
+                )
+                self._emit_policy_event(event)
+                raise OrgBudgetExceeded(
+                    event,
+                    policy=policy,
+                    current_usd=current_org,
+                    next_call_usd=next_call_burn,
+                    budget_usd=policy.budget_usd_per_org,
+                )
 
         # Budget check. We need to know what this call would *cost* before
         # it runs — same heuristic as ``rules/tool_loop.py``'s burn estimator
         # so the SDK side and the cloud side agree on the units.
         if policy.budget_usd_per_session is not None:
-            next_call_burn = _estimate_call_burn_usd(call, pricing_table=self.pricing_table)
             with self._policy_lock:
                 current_burn = self._session_burn.get(call.session_id, 0.0)
             projected = current_burn + next_call_burn
@@ -1190,6 +1246,7 @@ class Sentinel:
                     suggested_action="halt_session",
                     raised_at=datetime.now(timezone.utc),
                 )
+                self._emit_policy_event(event)
                 raise BudgetExceeded(
                     event,
                     policy=policy,
@@ -1229,6 +1286,7 @@ class Sentinel:
                     suggested_action="halt_or_throttle",
                     raised_at=datetime.now(timezone.utc),
                 )
+                self._emit_policy_event(event)
                 raise VelocityExceeded(
                     event,
                     policy=policy,
@@ -1267,6 +1325,7 @@ class Sentinel:
         now = time.monotonic()
 
         with self._policy_lock:
+            self._org_burn_local += burn_usd
             existing = self._session_burn.get(call.session_id)
             if existing is None:
                 self._session_burn[call.session_id] = burn_usd
@@ -1288,6 +1347,218 @@ class Sentinel:
             cutoff = now - _VELOCITY_WINDOW_SECONDS
             while self._tokens_minute_window and self._tokens_minute_window[0][0] < cutoff:
                 self._tokens_minute_window.popleft()
+
+    def _emit_policy_event(self, event: LeakEvent) -> None:
+        """Ship a policy-halt event to handlers + cloud (best effort)."""
+        try:
+            self._run_handlers(event)
+        except Exception:
+            pass
+
+    def _current_policy(self) -> Any:
+        client = self._policy_client
+        if client is None:
+            return None
+        try:
+            return client.current()
+        except Exception:
+            return None
+
+    def _note_preflight_hits(
+        self, session_id: str, events: list[LeakEvent]
+    ) -> PreflightBlocked | None:
+        """Flag recognised historical patterns; return an exception to raise."""
+        policy = self._current_policy()
+        if policy is None or not getattr(policy, "preflight_block_patterns", ()):
+            return None
+        blocked = set(policy.preflight_block_patterns)
+        hit: str | None = None
+        for ev in events:
+            if ev.type in blocked or ev.rule in blocked:
+                hit = ev.type
+                with self._policy_lock:
+                    self._preflight_flagged.setdefault(session_id, set()).add(ev.type)
+        if hit is None:
+            return None
+        event = LeakEvent(
+            type="preflight_blocked",
+            confidence=1.0,
+            project=self.project,
+            session_id=session_id,
+            rule="v0.6.policy.preflight",
+            evidence={
+                "policy_version": policy.policy_version,
+                "pattern": hit,
+                "blocked_patterns": list(policy.preflight_block_patterns),
+            },
+            estimated_burn=0.0,
+            suggested_action="halt_pattern",
+            raised_at=datetime.now(timezone.utc),
+        )
+        return PreflightBlocked(event, policy=policy, pattern=hit)
+
+    def preflight(
+        self,
+        session_id: str,
+        *,
+        estimated_tokens: int = 0,
+        model: str = "",
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+    ) -> None:
+        """Stop the *next* provider call when policy says so.
+
+        Wrappers call this BEFORE the HTTP request so a kill-switch,
+        org/session budget, or already-recognised waste pattern does not
+        spend again. Fail-open on any unexpected error.
+        """
+        client = self._policy_client
+        if client is None:
+            return
+        try:
+            client.mark_session_active(session_id)
+        except Exception:
+            pass
+        policy = self._current_policy()
+        if policy is None:
+            return
+
+        if policy.kill_switch_active:
+            event = LeakEvent(
+                type="kill_switch",
+                confidence=1.0,
+                project=self.project,
+                session_id=session_id,
+                rule="v0.6.policy",
+                evidence={
+                    "policy_version": policy.policy_version,
+                    "reason": "operator_kill_switch",
+                    "phase": "preflight",
+                },
+                estimated_burn=0.0,
+                suggested_action="halt_immediately",
+                raised_at=datetime.now(timezone.utc),
+            )
+            self._emit_policy_event(event)
+            raise KillSwitchActive(event, policy=policy)
+
+        with self._policy_lock:
+            flagged = set(self._preflight_flagged.get(session_id) or ())
+        blocked = set(getattr(policy, "preflight_block_patterns", ()) or ())
+        overlap = flagged.intersection(blocked)
+        if overlap:
+            pattern = sorted(overlap)[0]
+            event = LeakEvent(
+                type="preflight_blocked",
+                confidence=1.0,
+                project=self.project,
+                session_id=session_id,
+                rule="v0.6.policy.preflight",
+                evidence={
+                    "policy_version": policy.policy_version,
+                    "pattern": pattern,
+                    "phase": "preflight",
+                },
+                estimated_burn=0.0,
+                suggested_action="halt_pattern",
+                raised_at=datetime.now(timezone.utc),
+            )
+            self._emit_policy_event(event)
+            raise PreflightBlocked(event, policy=policy, pattern=pattern)
+
+        # Wrappers call preflight() without token estimates. Still halt
+        # when the session/org is *already* at or over the ceiling so
+        # the next provider HTTP does not spend.
+        if policy.budget_usd_per_org is not None:
+            with self._policy_lock:
+                if self._org_burn_policy_version != policy.policy_version:
+                    self._org_burn_local = float(policy.org_spend_usd or 0.0)
+                    self._org_burn_policy_version = policy.policy_version
+                current_org = self._org_burn_local
+            if current_org >= policy.budget_usd_per_org:
+                event = LeakEvent(
+                    type="org_budget_exceeded",
+                    confidence=1.0,
+                    project=self.project,
+                    session_id=session_id,
+                    rule="v0.6.policy.org_budget",
+                    evidence={
+                        "policy_version": policy.policy_version,
+                        "current_usd": round(current_org, 6),
+                        "next_call_usd": 0.0,
+                        "budget_usd": policy.budget_usd_per_org,
+                        "phase": "preflight",
+                    },
+                    estimated_burn=round(current_org, 6),
+                    suggested_action="halt_org",
+                    raised_at=datetime.now(timezone.utc),
+                )
+                self._emit_policy_event(event)
+                raise OrgBudgetExceeded(
+                    event,
+                    policy=policy,
+                    current_usd=current_org,
+                    next_call_usd=0.0,
+                    budget_usd=policy.budget_usd_per_org,
+                )
+        if policy.budget_usd_per_session is not None:
+            with self._policy_lock:
+                current_sess = self._session_burn.get(session_id, 0.0)
+            if current_sess >= policy.budget_usd_per_session:
+                event = LeakEvent(
+                    type="budget_exceeded",
+                    confidence=1.0,
+                    project=self.project,
+                    session_id=session_id,
+                    rule="v0.6.policy.budget",
+                    evidence={
+                        "policy_version": policy.policy_version,
+                        "current_usd": round(current_sess, 6),
+                        "next_call_usd": 0.0,
+                        "budget_usd": policy.budget_usd_per_session,
+                        "phase": "preflight",
+                    },
+                    estimated_burn=round(current_sess, 6),
+                    suggested_action="halt_session",
+                    raised_at=datetime.now(timezone.utc),
+                )
+                self._emit_policy_event(event)
+                raise BudgetExceeded(
+                    event,
+                    policy=policy,
+                    session_id=session_id,
+                    current_usd=current_sess,
+                    next_call_usd=0.0,
+                    budget_usd=policy.budget_usd_per_session,
+                )
+
+        tokens = max(0, int(estimated_tokens) or (int(prompt_tokens) + int(completion_tokens)))
+        if tokens <= 0 and not model:
+            return
+        fake = CallRecord(
+            session_id=session_id,
+            timestamp=datetime.now(timezone.utc),
+            provider="preflight",
+            model=model or "unknown",
+            method="preflight",
+            prompt_tokens=int(prompt_tokens) or tokens,
+            completion_tokens=int(completion_tokens),
+            latency_ms=0.0,
+            request_hash="preflight",
+        )
+        # Reuse the same budget / velocity checks as record_call. Kill
+        # switch already handled above.
+        try:
+            if policy.kill_switch_active:
+                return
+            # Build a lightweight CallRecord-shaped check via _enforce_policy
+            # would re-raise kill switch — we already handled it. Call
+            # enforce only for budget/velocity.
+            self._enforce_policy(fake)
+        except (KillSwitchActive, BudgetExceeded, OrgBudgetExceeded, VelocityExceeded, PreflightBlocked):
+            raise
+        except Exception:
+            return
 
     # ---------------------------------------------------------------------
     # Cloud sink lifecycle

@@ -53,7 +53,10 @@ Wire format::
       "fetched_at": "2026-05-09T12:34:56Z",
       "budget_usd_per_session": 0.50,    # null = unlimited
       "max_tokens_per_min": 100000,       # null = unlimited
-      "kill_switch_active": false
+      "kill_switch_active": false,
+      "budget_usd_per_org": 100.0,        # null = unlimited
+      "org_spend_usd": 12.34,             # trailing 30-day burn
+      "preflight_block_patterns": ["tool_loop"]
     }
 """
 
@@ -126,6 +129,9 @@ class Policy:
     kill_switch_active: bool
     fetched_at: datetime
     ttl_seconds: int
+    budget_usd_per_org: float | None = None
+    org_spend_usd: float = 0.0
+    preflight_block_patterns: tuple[str, ...] = ()
 
     def is_expired(self, *, now: datetime | None = None) -> bool:
         """Return ``True`` when the policy's TTL has elapsed.
@@ -156,6 +162,9 @@ def _build_blocked_policy() -> Policy:
         kill_switch_active=True,
         fetched_at=datetime.now(timezone.utc),
         ttl_seconds=0,
+        budget_usd_per_org=None,
+        org_spend_usd=0.0,
+        preflight_block_patterns=(),
     )
 
 
@@ -246,6 +255,33 @@ def _parse_policy(payload: dict[str, Any]) -> Policy:
     else:
         fetched_at = datetime.now(timezone.utc)
 
+    org_budget_raw = payload.get("budget_usd_per_org")
+    org_budget: float | None
+    if org_budget_raw is None:
+        org_budget = None
+    else:
+        try:
+            org_budget = float(org_budget_raw)
+            if org_budget < 0:
+                org_budget = None
+        except (TypeError, ValueError):
+            org_budget = None
+
+    org_spend = 0.0
+    try:
+        org_spend = float(payload.get("org_spend_usd") or 0.0)
+        if org_spend < 0:
+            org_spend = 0.0
+    except (TypeError, ValueError):
+        org_spend = 0.0
+
+    patterns_raw = payload.get("preflight_block_patterns") or []
+    patterns: tuple[str, ...]
+    if isinstance(patterns_raw, (list, tuple)):
+        patterns = tuple(str(x) for x in patterns_raw if x)
+    else:
+        patterns = ()
+
     return Policy(
         policy_version=policy_version,
         budget_usd_per_session=budget,
@@ -253,6 +289,9 @@ def _parse_policy(payload: dict[str, Any]) -> Policy:
         kill_switch_active=kill,
         fetched_at=fetched_at,
         ttl_seconds=ttl,
+        budget_usd_per_org=org_budget,
+        org_spend_usd=org_spend,
+        preflight_block_patterns=patterns,
     )
 
 
